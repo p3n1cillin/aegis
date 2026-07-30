@@ -29,7 +29,16 @@ from .base import Engagement, PlayerContext, build_context
 
 # Import for registration side effects. Order does not matter; column order is
 # derived from sorted extractor names.
-from . import aim, input_dynamics, movement, outcome, reaction, recoil, spectral  # noqa: F401
+from . import (  # noqa: F401
+    aim,
+    input_dynamics,
+    movement,
+    outcome,
+    reaction,
+    recoil,
+    spectral,
+    visibility,
+)
 
 
 @dataclass(frozen=True)
