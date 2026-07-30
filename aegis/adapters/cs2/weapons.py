@@ -86,3 +86,13 @@ def weapon_by_name(name: str) -> Weapon:
 
 def weapon_by_defindex(idx: int) -> Weapon:
     return WEAPONS.get(CS2_DEFINDEX_TO_ID.get(idx, 0), WEAPONS[0])
+
+
+# Prefer a stable defindex when encoding Session -> plugin frames.
+ID_TO_CS2_DEFINDEX: dict[int, int] = {}
+for _def, _wid in CS2_DEFINDEX_TO_ID.items():
+    ID_TO_CS2_DEFINDEX.setdefault(_wid, _def)
+
+
+def defindex_for_weapon(wid: int) -> int:
+    return int(ID_TO_CS2_DEFINDEX.get(int(wid), 0))

@@ -6,7 +6,9 @@ Commands:
   aegis evaluate       score a saved model on a held-out synthetic set
   aegis simulate       write one synthetic session capture for inspection
   aegis serve          launch the FastAPI adjudication service
+  aegis ingest         live plugin TCP ingest (captures + score)
   aegis explain        print an explanation for a scored synthetic lobby
+  aegis online-refresh fold human review labels into calibrators / novelty
 """
 
 from __future__ import annotations
@@ -41,15 +43,28 @@ def main(argv: list[str] | None = None) -> int:
     p_sim.add_argument("--duration", type=float, default=60.0)
     p_sim.add_argument("--seed", type=int, default=0)
     p_sim.add_argument("--families", type=str, default="aimbot_legit,clean,wallhack,clean,clean,norecoil")
+    p_sim.add_argument("--aegis-capture", action="store_true",
+                       help="also write a plugin-protocol .aegis capture")
 
     p_serve = sub.add_parser("serve", help="run the adjudication API")
     p_serve.add_argument("--model-dir", type=str, default="models")
     p_serve.add_argument("--host", type=str, default="127.0.0.1")
     p_serve.add_argument("--port", type=int, default=8080)
 
+    p_ing = sub.add_parser("ingest", help="live CS2 plugin TCP ingest")
+    p_ing.add_argument("--model-dir", type=str, default="models")
+    p_ing.add_argument("--capture-dir", type=str, default="data/captures")
+    p_ing.add_argument("--host", type=str, default="0.0.0.0")
+    p_ing.add_argument("--port", type=int, default=9100)
+
     p_exp = sub.add_parser("explain", help="train-free demo explanation on a tiny lobby")
     p_exp.add_argument("--model-dir", type=str, default="models")
     p_exp.add_argument("--seed", type=int, default=7)
+
+    p_on = sub.add_parser("online-refresh", help="refresh calibrators/novelty from review labels")
+    p_on.add_argument("--model-dir", type=str, default="models")
+    p_on.add_argument("--labels", type=str, required=True, help="JSONL review label store")
+    p_on.add_argument("--out", type=str, default=None, help="defaults to --model-dir")
 
     args = parser.parse_args(argv)
 
@@ -97,7 +112,6 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "simulate":
         from .train.simulate import simulate_session
-        from .train.dataset import generate_dataset  # noqa: F401
         import numpy as np
 
         families = [f.strip() for f in args.families.split(",") if f.strip()]
@@ -121,6 +135,10 @@ def main(argv: list[str] | None = None) -> int:
                 for s, p in sess.players.items()
             },
         }
+        if args.aegis_capture:
+            from .adapters.cs2.capture import session_to_frames, write_capture
+            cap = write_capture(out / f"{sess.session_id}.aegis", session_to_frames(sess))
+            meta["aegis_capture"] = str(cap)
         (out / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
         print(json.dumps(meta, indent=2))
         return 0
@@ -131,6 +149,15 @@ def main(argv: list[str] | None = None) -> int:
 
         app = create_app(model_dir=args.model_dir)
         uvicorn.run(app, host=args.host, port=args.port)
+        return 0
+
+    if args.cmd == "ingest":
+        from .service.ingest import serve_ingest
+
+        serve_ingest(
+            host=args.host, port=args.port,
+            model_dir=args.model_dir, capture_dir=args.capture_dir,
+        )
         return 0
 
     if args.cmd == "explain":
@@ -160,6 +187,18 @@ def main(argv: list[str] | None = None) -> int:
             print("=" * 60)
             print(f"label={labels.get(f.slot)}  player={f.player_id}")
             print(expl.as_text())
+        return 0
+
+    if args.cmd == "online-refresh":
+        from .models.ensemble import CalibratedEnsemble
+        from .train.online import OnlineStore, refresh_from_reviews
+
+        ens = CalibratedEnsemble.load(args.model_dir)
+        store = OnlineStore.load(args.labels)
+        ens, report = refresh_from_reviews(
+            ens, store, out_dir=args.out or args.model_dir,
+        )
+        print(json.dumps(report.to_dict(), indent=2))
         return 0
 
     return 1

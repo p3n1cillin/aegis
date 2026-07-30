@@ -21,13 +21,15 @@ Shadow mode defaults **ON**. A fresh deployment cannot ban anyone until an opera
 ```bash
 python -m venv .venv
 .venv\Scripts\activate          # Windows
-pip install -e .
+pip install -e ".[dev]"
 aegis train --sessions 48 --duration 75 --out models
 aegis evaluate --model-dir models --sessions 24
+aegis simulate --aegis-capture --out data/sample_session
+aegis ingest --model-dir models --capture-dir data/captures --port 9100
 aegis explain --model-dir models
 aegis serve --model-dir models --port 8080
+pytest -q
 ```
-
 ## Architecture (one screen)
 
 ```

@@ -4,6 +4,8 @@
 
 Sophisticated, learning, multi-game anti-cheat starting with CS2 (beat VACnet Live failure modes) and expandable past EAC-style single-channel designs.
 
+Repo: https://github.com/p3nicillin/aegis
+
 ## Status
 
 | Area | Status |
@@ -16,50 +18,46 @@ Sophisticated, learning, multi-game anti-cheat starting with CS2 (beat VACnet Li
 | Fusion: trust prior, SPRT, policy, explainability | Done |
 | Integrity: attestation server + HID analyzer | Done |
 | Train / evaluate / CLI / FastAPI service | Done |
-| Docs (README, ARCHITECTURE, HANDOFF) | Done |
-| Real CS2 plugin binary / client module | Not in-repo (protocol specified) |
+| Plugin capture encode + TCP ingest (`aegis ingest`) | Done |
+| Online learning refresh from review labels | Done |
+| Invariant regression tests | Done |
+| Real CS2 plugin binary / client module | Scaffolded (`plugins/cs2/`) — protocol encode/net/salt done; SDK hooks TODO |
 | Training on real labelled matches | Not yet — synthetic bootstrap only |
 | Production deployment / non-shadow bans | Explicitly gated off |
 
 ## How to run what exists
 
 ```bash
-pip install -e .
+pip install -e ".[dev]"   # or: pip install -e . && pip install pytest
 aegis train --sessions 48 --duration 75 --out models
 aegis evaluate --model-dir models --stealth-curve
+aegis simulate --aegis-capture --out data/sample_session
+aegis ingest --model-dir models --capture-dir data/captures --port 9100
 aegis serve --model-dir models
+pytest -q
 ```
 
 Artefacts land in `models/`: `ensemble.json`, `tabular.*`, `temporal.pt`, `novelty.pt`, calibrators, `conformal.npz`, `train_report.json`, `eval.json`, optional `dataset/`.
 
-## What Claude completed before handoff
+## What landed after the initial handoff
 
-1. Canonical `Session` / columnar ticks / event types / angle helpers
-2. Config knobs for features, models, fusion, policy, integrity
-3. Plugin registries (`ADAPTERS`, `EXTRACTORS`, `Capability`)
-4. Full feature layer with causal / statistical rationale in module docstrings
-5. CS2 adapter + plugin wire protocol + weapon table
-6. Generic FPS adapter
-7. Physically-grounded simulator (submovement human aim, mechanism-based cheats)
-
-## What this handoff completed
-
-8. Model stack + calibrated ensemble
-9. Bayesian SPRT fusion + adjudication + explanations
-10. Attestation + HID analysis
-11. Dataset / train / eval pipeline
-12. CLI + HTTP API
-13. README / ARCHITECTURE / HANDOFF
+14. Novelty AE robust to all-NaN capability columns
+15. Session ↔ plugin-frame capture encode (`adapters/cs2/capture.py`)
+16. Live TCP ingest with seq-gap handling + capture write (`service/ingest.py`)
+17. Online calibrator / novelty refresh from review JSONL (`train/online.py`)
+18. CLI: `ingest`, `online-refresh`, `simulate --aegis-capture`
+19. Invariant tests + CS2 plugin scaffold (encode/net/salt/vis stub + MetaMod entry)
+20. `plugins/cs2` CMake tools build (`encode_smoke`) without hl2sdk
 
 ## Next work (priority order)
 
-1. **Fit on real negatives** from a CS2 server plugin capture before touching ban thresholds.
-2. Implement / integrate the Source2 plugin per `PLUGIN_PROTOCOL.md` (vis at 16 Hz, authoritative recoil, salted account ids).
-3. Client attestation module (separate binary) speaking the challenge protocol in `integrity/attest.py`.
-4. Online learning loop: human review labels → calibration refresh → novelty fine-tune on new cleans.
+1. **Wire SDK hooks** in `plugins/cs2` (GameFrame, weapon_fire + `m_aimPunchAngle`, hurt/death, TraceShape for vis).
+2. **Fit on real negatives** from plugin captures before touching ban thresholds.
+3. Client attestation module (separate binary) speaking `integrity/attest.py`.
+4. Review UI / queue that appends `ReviewLabel` rows and calls `aegis online-refresh`.
 5. Per-title conformal gates (do not share α operating points across games).
-6. Expand simulator maps / network jitter once real telemetry shows the residual error modes.
-7. Hardening: auth on the API, signed model artefacts, audit log for every issued verdict.
+6. Expand simulator maps / network jitter once real telemetry shows residual error modes.
+7. Hardening: auth on the API, signed model artefacts, audit log for every issued verdict; replace scaffold FNV salt with HMAC-SHA256.
 
 ## Invariants — do not break
 
@@ -78,3 +76,5 @@ Artefacts land in `models/`: `ensemble.json`, `tabular.*`, `temporal.pt`, `novel
 - `aegis/models/ensemble.py` — serve-time scoring
 - `aegis/fusion/sprt.py` + `policy.py` — how bans are (not) issued
 - `aegis/adapters/cs2/PLUGIN_PROTOCOL.md` — production ingest
+- `aegis/service/ingest.py` — live capture path
+- `plugins/cs2/README.md` — plugin implementation notes

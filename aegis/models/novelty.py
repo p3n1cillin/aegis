@@ -86,10 +86,17 @@ class NoveltyAE:
         X = np.asarray(X_clean, dtype=np.float32)
         if X.shape[1] != len(self.spec.columns):
             raise ValueError("feature width mismatch")
-        # Robust column scale from clean population.
-        self.center_ = np.nanmedian(X, axis=0).astype(np.float32)
-        mad = np.nanmedian(np.abs(X - self.center_), axis=0)
-        self.scale_ = np.maximum(1.4826 * mad, 1e-3).astype(np.float32)
+        # Robust column scale from clean population. Some capability-gated
+        # columns are all-NaN on short / partial sessions (e.g. bhop metrics
+        # with no jump chains) — treat those as zero-centered unit scale so
+        # the AE does not poison itself with nanmedian warnings.
+        with np.errstate(all="ignore"):
+            center = np.nanmedian(X, axis=0)
+            mad = np.nanmedian(np.abs(X - center), axis=0)
+        self.center_ = np.nan_to_num(center, nan=0.0).astype(np.float32)
+        self.scale_ = np.maximum(
+            1.4826 * np.nan_to_num(mad, nan=0.0), 1e-3
+        ).astype(np.float32)
         Z = self._prep(X)
 
         epochs = epochs or self.cfg.epochs

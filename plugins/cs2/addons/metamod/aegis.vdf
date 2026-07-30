@@ -1,0 +1,5 @@
+"Metamod Plugin"
+{
+	"alias"		"Aegis"
+	"file"		"addons/aegis/aegis"
+}

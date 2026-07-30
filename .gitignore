@@ -4,11 +4,11 @@ __pycache__/
 *.egg-info/
 build/
 dist/
-models/*.pt
-models/*.joblib
-models/*.npz
-data/
+/models/
+/data/
 *.log
 .pytest_cache/
 .ipynb_checkpoints/
 scratch/
+plugins/cs2/build/
+plugins/cs2/build-tools/
