@@ -21,7 +21,7 @@ Repo: https://github.com/p3nicillin/aegis
 | Plugin capture encode + TCP ingest (`aegis ingest`) | Done |
 | Online learning refresh from review labels | Done |
 | Invariant regression tests | Done |
-| Real CS2 plugin binary / client module | Scaffolded (`plugins/cs2/`) — protocol encode/net/salt done; SDK hooks TODO |
+| Real CS2 plugin binary / client module | Scaffold + SDK bridge (`plugins/cs2/`) — schema/hook fill-ins left |
 | Training on real labelled matches | Not yet — synthetic bootstrap only |
 | Production deployment / non-shadow bans | Explicitly gated off |
 
@@ -51,13 +51,13 @@ Artefacts land in `models/`: `ensemble.json`, `tabular.*`, `temporal.pt`, `novel
 
 ## Next work (priority order)
 
-1. **Wire SDK hooks** in `plugins/cs2` (GameFrame, weapon_fire + `m_aimPunchAngle`, hurt/death, TraceShape for vis).
+1. **Fill schema + hooks** per `plugins/cs2/SDK_WIRING.md` (eye angles, punch, TraceShape, GameFrame / game events).
 2. **Fit on real negatives** from plugin captures before touching ban thresholds.
 3. Client attestation module (separate binary) speaking `integrity/attest.py`.
 4. Review UI / queue that appends `ReviewLabel` rows and calls `aegis online-refresh`.
 5. Per-title conformal gates (do not share α operating points across games).
 6. Expand simulator maps / network jitter once real telemetry shows residual error modes.
-7. Hardening: auth on the API, signed model artefacts, audit log for every issued verdict; replace scaffold FNV salt with HMAC-SHA256.
+7. Hardening: auth on the API, signed model artefacts, audit log for every issued verdict.
 
 ## Invariants — do not break
 

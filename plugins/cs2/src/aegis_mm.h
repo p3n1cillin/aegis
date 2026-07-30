@@ -1,6 +1,7 @@
 #pragma once
 
 #include "config.h"
+#include "frames.h"
 #include "net_client.h"
 #include "vis_worker.h"
 
@@ -25,6 +26,9 @@ public:
     // Called every server tick — must stay cheap; only snapshots + enqueue.
     void on_game_frame(double t, int tick, const std::vector<PlayerState>& players);
 
+    // Prefer this from MetaMod GameFrame — pulls players via SdkHooks.
+    void tick_from_sdk(double t, int tick);
+
     // Fire with the view angle the server used for the shot and the accumulated
     // m_aimPunchAngle — never the post-shot client angle.
     void on_weapon_fire(double t, int tick, int slot, int weapon_defindex,
@@ -40,8 +44,14 @@ public:
                          bool smoke, bool wall, bool flash, bool noscope,
                          float exposure_ms);
 
+    PlayerInfoFrame make_roster_entry(int slot, const std::string& name,
+                                      int team, bool bot,
+                                      float trust = 0.5f, int rank = 0,
+                                      float hours = 0);
+
     NetClient& net() { return net_; }
     uint32_t seq() const { return seq_; }
+    const Config& config() const { return cfg_; }
 
 private:
     Config cfg_;

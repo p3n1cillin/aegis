@@ -9,16 +9,16 @@ void VisWorker::configure(float hz, float min_interval_s) {
     min_interval_s_ = min_interval_s;
 }
 
-bool VisWorker::probe_pair(const PlayerState& /*observer*/,
-                           const PlayerState& /*subject*/) const {
-    // Intentionally unimplemented without SDK traces.
-    return false;
+bool VisWorker::probe_pair(const PlayerState& observer,
+                           const PlayerState& subject) const {
+    if (!probe_) return false;
+    return probe_(observer, subject);
 }
 
 void VisWorker::tick(double t, int server_tick, NetClient& net,
                      const std::vector<PlayerState>& players,
                      uint32_t& seq) {
-    if (!enabled_) return;
+    if (!enabled_ || !probe_) return;
     if (last_pass_t_ >= 0.0 && (t - last_pass_t_) < (1.0 / hz_)) return;
     last_pass_t_ = t;
 
@@ -41,7 +41,6 @@ void VisWorker::tick(double t, int server_tick, NetClient& net,
             const float dy = players[j].y - players[i].y;
             const float dz = players[j].z - players[i].z;
             const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
-            // angle_error filled properly once eye vectors are available from SDK.
             auto payload = encode_vis(t, server_tick, o, u, vis, 0.0f, dist, seq++);
             net.push(frame_packet(payload));
         }

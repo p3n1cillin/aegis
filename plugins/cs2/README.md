@@ -55,11 +55,14 @@ build-tools\encode_smoke.exe
 
 | Module | Status |
 |---|---|
-| msgpack encode + TCP framing | Implemented (SDK-free) |
-| Net client (non-blocking queue) | Implemented (BSD sockets) |
-| Account-id salt | Implemented |
-| Vis worker skeleton | Stub — needs `TraceShape` / entity iteration via SDK |
-| Weapon fire / punch angle hooks | Stub — `TODO` markers at hook sites |
-| Full MetaMod load | Requires `HL2SDKCS2` + `MMSOURCE112` |
+| msgpack encode + TCP framing | Done |
+| Net client (non-blocking queue) | Done |
+| Account-id salt (HMAC-SHA256 on Windows) | Done |
+| SDK bridge + MetaMod hook skeleton | Done — fill `TODO(schema)` / `TODO(sdk)` |
+| Vis worker | Ready; gated on TraceShape self-test |
+| Weapon fire / punch angle | Hook site + `snapshot_fire` ready |
+| Full MetaMod load | Needs `HL2SDKCS2` + `MMSOURCE112` |
+
+See [SDK_WIRING.md](SDK_WIRING.md) for the exact field/hook checklist.
 
 Do **not** invent visibility. If traces are unavailable, set `hdr.no_vis = true`.

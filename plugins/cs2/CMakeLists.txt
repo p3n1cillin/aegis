@@ -13,6 +13,7 @@ set(AEGIS_COMMON_SOURCES
   src/net_client.cpp
   src/salt.cpp
   src/vis_worker.cpp
+  src/sdk_bridge.cpp
   src/aegis_mm.cpp
 )
 
@@ -22,13 +23,13 @@ add_library(aegis_protocol STATIC
   src/net_client.cpp
   src/salt.cpp
   src/vis_worker.cpp
+  src/sdk_bridge.cpp
   src/aegis_mm.cpp
 )
 target_include_directories(aegis_protocol PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 if(WIN32)
-  target_link_libraries(aegis_protocol PUBLIC ws2_32)
+  target_link_libraries(aegis_protocol PUBLIC ws2_32 bcrypt)
 endif()
-
 add_executable(encode_smoke tools/encode_smoke.cpp)
 target_link_libraries(encode_smoke PRIVATE aegis_protocol)
 
@@ -59,7 +60,7 @@ if(AEGIS_WITH_METAMOD)
     ${HL2SDKCS2}/game/shared
   )
   if(WIN32)
-    target_link_libraries(aegis PRIVATE ws2_32)
+    target_link_libraries(aegis PRIVATE ws2_32 bcrypt)
   endif()
   # Full link line against tier0/tier1/interfaces is SDK-version specific —
   # fill in once your hl2sdk-cs2 tree is checked out.
