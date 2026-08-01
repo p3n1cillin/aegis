@@ -192,7 +192,13 @@ async def _handle_client(
     log.info("ingest connect %s", peer)
     try:
         while True:
-            chunk = await reader.read(65536)
+            try:
+                chunk = await reader.read(65536)
+            except (ConnectionError, OSError) as e:
+                # A crashed or force-killed game server resets the connection
+                # instead of closing it. Keep whatever we already decoded.
+                log.warning("connection lost %s: %s", peer, e)
+                break
             if not chunk:
                 break
             st.buf.extend(chunk)
@@ -229,9 +235,11 @@ async def _handle_client(
                 await writer.drain()
             except Exception:
                 pass
+        else:
+            log.warning("ingest closed %s with no frames", peer)
     finally:
-        writer.close()
         try:
+            writer.close()
             await writer.wait_closed()
         except Exception:
             pass

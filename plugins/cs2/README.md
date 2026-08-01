@@ -58,10 +58,11 @@ build-tools\encode_smoke.exe
 | msgpack encode + TCP framing | Done |
 | Net client (non-blocking queue) | Done |
 | Account-id salt (HMAC-SHA256 on Windows) | Done |
-| SDK bridge + MetaMod hook skeleton | Done — fill `TODO(schema)` / `TODO(sdk)` |
-| Vis worker | Ready; gated on TraceShape self-test |
-| Weapon fire / punch angle | Hook site + `snapshot_fire` ready |
-| Full MetaMod load | Needs `HL2SDKCS2` + `MMSOURCE112` |
+| SDK bridge + MetaMod hooks | **Live** — GameFrame, roster, weapon_fire / hurt / death |
+| Schema field readers | **Live** — runtime `ISchemaSystem` offsets |
+| Vis worker | Ready; gated off (`hdr.no_vis`) until TraceShape exists |
+| Weapon fire / punch angle | **Live** via `weapon_fire` + schema punch/eye |
+| Full MetaMod load | Needs `HL2SDKCS2` + `MMSOURCE112` (lab scripts set these) |
 
 See [SDK_WIRING.md](SDK_WIRING.md) for the exact field/hook checklist.
 

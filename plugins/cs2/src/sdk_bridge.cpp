@@ -1,122 +1,297 @@
 #include "sdk_bridge.h"
 
+#include "schema_offset.h"
+
+#include <array>
+#include <cmath>
+#include <cstring>
+#include <mutex>
+#include <string>
+#include <unordered_map>
+
 namespace aegis {
 
 static SdkHooks g_hooks;
-
 SdkHooks& sdk_hooks() { return g_hooks; }
 
 }  // namespace aegis
 
 #ifdef AEGIS_WITH_METAMOD
 
-// ============================================================================
-// SDK-backed implementations — compiled only with hl2sdk-cs2 + metamod.
-// Exact schema field names and TraceShape signatures vary by CS2 build;
-// the // TODO(schema) markers are the fill-in points after you sync your
-// SDK to the server branch you ship.
-// ============================================================================
-
-#  include <cmath>
-#  include <cstring>
-
-// Forward-declared engine types (real headers come from HL2SDKCS2).
-// Keeping them opaque here lets this translation unit document the contract
-// even when include paths differ across MMS versions.
-struct CBaseEntity;
-struct CBasePlayerController;
-struct CCSPlayerPawn;
-struct CCSPlayerController;
+#  include <eiface.h>
+#  include <iserver.h>
+#  include <schemasystem/schemasystem.h>
 
 namespace aegis {
 namespace sdk {
 
-// ---- schema field accessors (fill offsets / schema names) ---------------
-//
-// Recommended approach on CS2: use the schema system
-//   schema::GetOffset("CCSPlayerPawn", "m_angEyeAngles")
-// rather than hard-coded offsets, which break every Valve patch.
+namespace {
 
-struct EyeAngles {
-    float pitch = 0, yaw = 0, roll = 0;
-};
-struct Vec3 {
-    float x = 0, y = 0, z = 0;
+constexpr int kMaxSlots = 64;
+
+std::mutex g_pawn_mu;
+std::array<void*, kMaxSlots> g_pawns{};
+std::array<int, kMaxSlots> g_last_weapon{};
+
+IVEngineServer* g_engine = nullptr;
+ISource2Server* g_server = nullptr;
+INetworkServerService* g_netsvc = nullptr;
+float g_tick_interval = 1.0f / 64.0f;
+bool g_vis_ready = false;
+
+struct NamedWeapon {
+    const char* name;
+    int defindex;
 };
 
-// TODO(schema): read m_angEyeAngles from CCSPlayerPawn
-static EyeAngles read_eye_angles(CCSPlayerPawn* /*pawn*/) {
+// CS2 item definition indices (server event "weapon" names drop weapon_ prefix).
+constexpr NamedWeapon kWeapons[] = {
+    {"ak47", 7},         {"m4a1", 16},       {"m4a1_silencer", 60},
+    {"awp", 9},          {"ssg08", 40},      {"deagle", 1},
+    {"usp_silencer", 61},{"glock", 4},       {"p250", 36},
+    {"tec9", 30},        {"fiveseven", 3},   {"galilar", 13},
+    {"famas", 10},       {"aug", 8},         {"sg556", 39},
+    {"mp9", 34},         {"mac10", 17},      {"mp7", 33},
+    {"ump45", 24},       {"p90", 19},        {"bizon", 26},
+    {"nova", 35},        {"xm1014", 25},     {"mag7", 27},
+    {"negev", 28},       {"m249", 14},       {"scar20", 38},
+    {"g3sg1", 11},       {"revolver", 64},   {"cz75a", 63},
+    {"elite", 2},        {"hkp2000", 32},    {"mp5sd", 23},
+    {"knife", 42},       {"hegrenade", 44},  {"flashbang", 43},
+    {"smokegrenade", 45},{"molotov", 46},    {"incgrenade", 48},
+    {"decoy", 47},
+};
+
+QAngle3 read_angles(void* pawn, const char* cls, const char* field) {
+    QAngle3 a{};
+    if (auto* p = schema::field<QAngle3>(pawn, cls, field)) return *p;
+    // Alternate class names used across schema dumps.
+    if (auto* p = schema::field<QAngle3>(pawn, "CCSPlayerPawnBase", field)) return *p;
+    if (auto* p = schema::field<QAngle3>(pawn, "CCSPlayerPawn", field)) return *p;
+    (void)a;
     return {};
 }
 
-// TODO(schema): read m_aimPunchAngle (accumulated) from CCSPlayerPawn
-static EyeAngles read_aim_punch(CCSPlayerPawn* /*pawn*/) {
+// CS2 keeps world transform on the entity's scene node, not the entity itself:
+// CBaseEntity::m_pGameSceneNode -> CGameSceneNode::m_vecAbsOrigin.
+Vec3 read_scene_origin(void* pawn) {
+    void** node_ptr = schema::field<void*>(pawn, "CBaseEntity", "m_pGameSceneNode");
+    if (!node_ptr || !*node_ptr) return {};
+    if (auto* p = schema::field<Vec3>(*node_ptr, "CGameSceneNode", "m_vecAbsOrigin")) {
+        return *p;
+    }
     return {};
 }
 
-// TODO(schema): origin / velocity / health / armor / weapon defindex / buttons
-static Vec3 read_origin(CCSPlayerPawn* /*pawn*/) { return {}; }
-static Vec3 read_velocity(CCSPlayerPawn* /*pawn*/) { return {}; }
-static int read_health(CCSPlayerPawn* /*pawn*/) { return 0; }
-static int read_armor(CCSPlayerPawn* /*pawn*/) { return 0; }
-static int read_weapon_defindex(CCSPlayerPawn* /*pawn*/) { return 0; }
-static int read_ammo(CCSPlayerPawn* /*pawn*/) { return 0; }
-static int read_buttons(CCSPlayerPawn* /*pawn*/) { return 0; }
-static int read_shots_fired(CCSPlayerPawn* /*pawn*/) { return 0; }
-static float read_move_fwd(CCSPlayerPawn* /*pawn*/) { return 0; }
-static float read_move_side(CCSPlayerPawn* /*pawn*/) { return 0; }
+QAngle3 read_scene_angles(void* pawn) {
+    void** node_ptr = schema::field<void*>(pawn, "CBaseEntity", "m_pGameSceneNode");
+    if (!node_ptr || !*node_ptr) return {};
+    if (auto* p = schema::field<QAngle3>(*node_ptr, "CGameSceneNode", "m_angAbsRotation")) {
+        return *p;
+    }
+    return {};
+}
 
-// TODO(schema): assemble PLUGIN_PROTOCOL flag bits from pawn state
-static int read_flags(CCSPlayerPawn* /*pawn*/) { return 0; }
+Vec3 read_vec(void* pawn, const char* primary_cls, const char* field) {
+    if (auto* p = schema::field<Vec3>(pawn, primary_cls, field)) return *p;
+    if (auto* p = schema::field<Vec3>(pawn, "CBasePlayerPawn", field)) return *p;
+    if (auto* p = schema::field<Vec3>(pawn, "CBaseEntity", field)) return *p;
+    if (auto* p = schema::field<Vec3>(pawn, "CCSPlayerPawn", field)) return *p;
+    return {};
+}
 
-// TODO(engine): iterate controllers / pawns for the current match
-static std::vector<CCSPlayerPawn*> all_pawns() { return {}; }
-static int slot_of(CCSPlayerPawn* /*pawn*/) { return -1; }
-static uint64_t steamid64_of(CCSPlayerController* /*ctrl*/) { return 0; }
-static CCSPlayerController* controller_of(CCSPlayerPawn* /*pawn*/) { return nullptr; }
+int try_int(void* pawn, std::initializer_list<std::pair<const char*, const char*>> locs,
+            int fallback = 0) {
+    for (auto [cls, field] : locs) {
+        const int off = schema::offset_of(cls, field);
+        if (off < 0) continue;
+        return *reinterpret_cast<int*>(reinterpret_cast<uintptr_t>(pawn) +
+                                       static_cast<uintptr_t>(off));
+    }
+    return fallback;
+}
 
-// TODO(engine): TraceShape from eye to subject. Must NOT invent visibility.
-static bool trace_los(const Vec3& /*from*/, const Vec3& /*to*/) {
+bool try_bool(void* pawn, std::initializer_list<std::pair<const char*, const char*>> locs) {
+    for (auto [cls, field] : locs) {
+        const int off = schema::offset_of(cls, field);
+        if (off < 0) continue;
+        return *reinterpret_cast<bool*>(reinterpret_cast<uintptr_t>(pawn) +
+                                        static_cast<uintptr_t>(off));
+    }
     return false;
 }
 
-static bool g_vis_ready = false;
+float try_float(void* pawn, std::initializer_list<std::pair<const char*, const char*>> locs) {
+    for (auto [cls, field] : locs) {
+        const int off = schema::offset_of(cls, field);
+        if (off < 0) continue;
+        return *reinterpret_cast<float*>(reinterpret_cast<uintptr_t>(pawn) +
+                                         static_cast<uintptr_t>(off));
+    }
+    return 0.f;
+}
+
+uint32_t try_u32(void* pawn, std::initializer_list<std::pair<const char*, const char*>> locs) {
+    for (auto [cls, field] : locs) {
+        const int off = schema::offset_of(cls, field);
+        if (off < 0) continue;
+        return *reinterpret_cast<uint32_t*>(reinterpret_cast<uintptr_t>(pawn) +
+                                            static_cast<uintptr_t>(off));
+    }
+    return 0;
+}
+
+int read_flags_bits(void* pawn) {
+    int f = 0;
+    const uint32_t ent_flags = try_u32(pawn, {{"CBaseEntity", "m_fFlags"}});
+    // FL_ONGROUND=1, FL_DUCKING=2 in Source.
+    if (ent_flags & 1) f |= flag::ON_GROUND;
+    if (ent_flags & 2) f |= flag::DUCKING;
+    if (try_bool(pawn, {{"CCSPlayerPawn", "m_bIsScoped"},
+                        {"CCSPlayerPawnBase", "m_bIsScoped"}})) {
+        f |= flag::SCOPED;
+    }
+    if (try_bool(pawn, {{"CCSPlayerPawn", "m_bIsDefusing"}})) f |= flag::DEFUSING;
+    const float flash = try_float(pawn, {{"CCSPlayerPawnBase", "m_flFlashDuration"},
+                                         {"CCSPlayerPawn", "m_flFlashDuration"}});
+    if (flash > 0.5f) f |= flag::FLASHED;
+    else if (flash > 0.05f) f |= flag::BLIND_PARTIAL;
+    return f;
+}
+
+}  // namespace
+
+void cache_pawn(int slot, void* pawn) {
+    if (slot < 0 || slot >= kMaxSlots) return;
+    std::lock_guard<std::mutex> lock(g_pawn_mu);
+    g_pawns[static_cast<size_t>(slot)] = pawn;
+}
+
+void clear_pawn(int slot) {
+    if (slot < 0 || slot >= kMaxSlots) return;
+    std::lock_guard<std::mutex> lock(g_pawn_mu);
+    g_pawns[static_cast<size_t>(slot)] = nullptr;
+    g_last_weapon[static_cast<size_t>(slot)] = 0;
+}
+
+void* pawn_for_slot(int slot) {
+    if (slot < 0 || slot >= kMaxSlots) return nullptr;
+    std::lock_guard<std::mutex> lock(g_pawn_mu);
+    return g_pawns[static_cast<size_t>(slot)];
+}
+
+void set_last_weapon(int slot, int defindex) {
+    if (slot < 0 || slot >= kMaxSlots) return;
+    g_last_weapon[static_cast<size_t>(slot)] = defindex;
+}
+
+int last_weapon(int slot) {
+    if (slot < 0 || slot >= kMaxSlots) return 0;
+    return g_last_weapon[static_cast<size_t>(slot)];
+}
+
+int weapon_defindex_from_name(const char* name) {
+    if (!name || !*name) return 0;
+    std::string n = name;
+    if (n.rfind("weapon_", 0) == 0) n = n.substr(7);
+    for (const auto& w : kWeapons) {
+        if (n == w.name) return w.defindex;
+    }
+    return 0;
+}
+
+PlayerState snapshot_player(int slot, void* pawn) {
+    PlayerState s;
+    s.slot = slot;
+    if (!pawn) return s;
+
+    Vec3 o = read_scene_origin(pawn);
+    if (o.x == 0 && o.y == 0 && o.z == 0) {
+        o = read_vec(pawn, "CBasePlayerPawn", "m_vOldOrigin");
+    }
+    const Vec3 v = read_vec(pawn, "CBaseEntity", "m_vecAbsVelocity");
+    QAngle3 eye = read_angles(pawn, "CCSPlayerPawn", "m_angEyeAngles");
+    if (eye.x == 0 && eye.y == 0) {
+        eye = read_angles(pawn, "CBasePlayerPawn", "v_angle");
+    }
+    if (eye.x == 0 && eye.y == 0) {
+        eye = read_scene_angles(pawn);
+    }
+
+    s.x = o.x; s.y = o.y; s.z = o.z;
+    s.vx = v.x; s.vy = v.y; s.vz = v.z;
+    s.pitch = eye.pitch();
+    s.yaw = eye.yaw();
+    s.hp = try_int(pawn, {{"CBaseEntity", "m_iHealth"}});
+    s.armor = try_int(pawn, {{"CCSPlayerPawn", "m_ArmorValue"},
+                             {"CCSPlayerPawnBase", "m_ArmorValue"}});
+    s.weapon_defindex = last_weapon(slot);
+    s.ammo = 0;
+    s.flags = read_flags_bits(pawn);
+    s.shots_fired = try_int(pawn, {{"CCSPlayerPawn", "m_iShotsFired"},
+                                   {"CCSPlayerPawnBase", "m_iShotsFired"}});
+    s.aim_target = -1;
+    s.aim_target_vis = 0;
+    s.move_fwd = 0;
+    s.move_side = 0;
+    s.buttons = 0;
+    return s;
+}
+
+FireSnapshot snapshot_fire(void* pawn) {
+    FireSnapshot fs;
+    if (!pawn) return fs;
+    QAngle3 eye = read_angles(pawn, "CCSPlayerPawn", "m_angEyeAngles");
+    if (eye.x == 0 && eye.y == 0) {
+        eye = read_angles(pawn, "CCSPlayerPawnBase", "m_angEyeAngles");
+    }
+    QAngle3 punch = read_angles(pawn, "CCSPlayerPawn", "m_aimPunchAngle");
+    if (punch.x == 0 && punch.y == 0) {
+        punch = read_angles(pawn, "CCSPlayerPawnBase", "m_aimPunchAngle");
+    }
+    fs.pitch = eye.pitch();
+    fs.yaw = eye.yaw();
+    fs.punch_pitch = punch.pitch();
+    fs.punch_yaw = punch.yaw();
+    fs.spread = 0.f;
+    return fs;
+}
+
+float dist_between_slots(int a, int b) {
+    void* pa = pawn_for_slot(a);
+    void* pb = pawn_for_slot(b);
+    if (!pa || !pb) return -1.f;
+    const PlayerState sa = snapshot_player(a, pa);
+    const PlayerState sb = snapshot_player(b, pb);
+    const float dx = sa.x - sb.x, dy = sa.y - sb.y, dz = sa.z - sb.z;
+    return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
 
 std::vector<PlayerState> collect_players_impl() {
     std::vector<PlayerState> out;
-    for (CCSPlayerPawn* pawn : all_pawns()) {
-        if (!pawn) continue;
-        PlayerState s;
-        s.slot = slot_of(pawn);
-        if (s.slot < 0) continue;
-        const Vec3 o = read_origin(pawn);
-        const Vec3 v = read_velocity(pawn);
-        const EyeAngles eye = read_eye_angles(pawn);
-        s.x = o.x; s.y = o.y; s.z = o.z;
-        s.vx = v.x; s.vy = v.y; s.vz = v.z;
-        s.pitch = eye.pitch;
-        s.yaw = eye.yaw;
-        s.hp = read_health(pawn);
-        s.armor = read_armor(pawn);
-        s.weapon_defindex = read_weapon_defindex(pawn);
-        s.ammo = read_ammo(pawn);
-        s.flags = read_flags(pawn);
-        s.shots_fired = read_shots_fired(pawn);
-        s.aim_target = -1;       // TODO(engine): crosshair raycast slot
-        s.aim_target_vis = 0;
-        s.move_fwd = read_move_fwd(pawn);
-        s.move_side = read_move_side(pawn);
-        s.buttons = read_buttons(pawn);
-        out.push_back(s);
+    std::array<void*, kMaxSlots> snap{};
+    {
+        std::lock_guard<std::mutex> lock(g_pawn_mu);
+        snap = g_pawns;
+    }
+    for (int i = 0; i < kMaxSlots; ++i) {
+        if (!snap[static_cast<size_t>(i)]) continue;
+        out.push_back(snapshot_player(i, snap[static_cast<size_t>(i)]));
     }
     return out;
 }
 
-bool trace_visible_impl(const PlayerState& observer, const PlayerState& subject) {
-    // Eye height ≈ 64 Hammer units when standing — refine from pawn view offset.
-    Vec3 from{observer.x, observer.y, observer.z + 64.0f};
-    Vec3 to{subject.x, subject.y, subject.z + 48.0f};
-    return trace_los(from, to);
+bool trace_visible_impl(const PlayerState&, const PlayerState&) {
+    return false;  // TraceShape not in public SDK — leave vis disabled.
+}
+
+void set_engine_context(void* engine, void* server, void* server_config,
+                        void* network_service, float tick_interval) {
+    (void)server_config;  // deliberately unused; see tickrate hook
+    g_engine = static_cast<IVEngineServer*>(engine);
+    g_server = static_cast<ISource2Server*>(server);
+    g_netsvc = static_cast<INetworkServerService*>(network_service);
+    if (tick_interval > 0.f) g_tick_interval = tick_interval;
 }
 
 void install_sdk_hooks() {
@@ -124,41 +299,39 @@ void install_sdk_hooks() {
     h.collect_players = collect_players_impl;
     h.trace_visible = trace_visible_impl;
     h.vis_ready = [] { return g_vis_ready; };
-    h.current_map = [] { return std::string{}; /* TODO(engine) */ };
-    h.tickrate = [] { return 64.0f; /* TODO(engine): gpGlobals / CVAR */ };
-    h.steamid64_for_slot = [](int /*slot*/) -> uint64_t {
-        // TODO(engine): look up controller by slot
-        return 0;
+    h.current_map = []() -> std::string {
+        if (g_server) {
+            if (const char* m = g_server->GetActiveWorldName()) return m;
+        }
+        if (g_netsvc && g_netsvc->GetIGameServer()) {
+            if (CGlobalVars* g = g_netsvc->GetIGameServer()->GetGlobals()) {
+                if (const char* m = STRING(g->mapname)) return m;
+            }
+        }
+        return {};
     };
-    // Flip only after a successful TraceShape self-test on map start.
+    // curtime == tickcount * tick_interval, so the ratio recovers the interval.
+    // ISource2ServerConfig::GetTickInterval() would be direct, but MetaMod patches
+    // that interface's vtable during load and fetching it corrupts server startup.
+    h.tickrate = [] {
+        if (g_netsvc && g_netsvc->GetIGameServer()) {
+            if (CGlobalVars* g = g_netsvc->GetIGameServer()->GetGlobals()) {
+                if (g->tickcount > 8 && g->curtime > 0.f) {
+                    const float iv = g->curtime / static_cast<float>(g->tickcount);
+                    if (iv > 0.f) return 1.0f / iv;
+                }
+            }
+        }
+        return g_tick_interval > 0.f ? 1.0f / g_tick_interval : 64.0f;
+    };
+    h.steamid64_for_slot = [](int slot) -> uint64_t {
+        if (!g_engine || slot < 0) return 0;
+        return g_engine->GetClientXUID(CPlayerSlot(slot));
+    };
     g_vis_ready = false;
 }
 
 void mark_vis_ready(bool ok) { g_vis_ready = ok; }
-
-// Snapshot punch + eye at the moment of fire. Call from weapon_fire handler
-// BEFORE any post-shot angle mutation.
-struct FireSnapshot {
-    float pitch = 0, yaw = 0;
-    float punch_pitch = 0, punch_yaw = 0;
-    int weapon_defindex = 0;
-    float spread = 0;
-};
-
-FireSnapshot snapshot_fire(CCSPlayerPawn* pawn) {
-    FireSnapshot fs;
-    if (!pawn) return fs;
-    const EyeAngles eye = read_eye_angles(pawn);
-    const EyeAngles punch = read_aim_punch(pawn);
-    fs.pitch = eye.pitch;
-    fs.yaw = eye.yaw;
-    fs.punch_pitch = punch.pitch;
-    fs.punch_yaw = punch.yaw;
-    fs.weapon_defindex = read_weapon_defindex(pawn);
-    // TODO(schema): weapon inaccuracy / spread at fire
-    fs.spread = 0.0f;
-    return fs;
-}
 
 }  // namespace sdk
 }  // namespace aegis

@@ -1,61 +1,48 @@
 # SDK wiring checklist
 
-Fill these in order against your `hl2sdk-cs2` + MetaMod:Source2 trees. Do not
-guess offsets — use the schema system so Valve patches do not silently invert
-recoil features.
+Status (lab build): **GameFrame + roster + schema readers + game-event path are wired.**
+Visibility stays off (`hdr.no_vis`) until TraceShape is reverse-engineered.
 
 ## 1. Environment
 
 ```bat
-git clone --branch cs2 https://github.com/alliedmodders/hl2sdk hl2sdk-cs2
-git clone --recursive https://github.com/alliedmodders/metamod-source
-set HL2SDKCS2=C:\path\to\hl2sdk-cs2
-set MMSOURCE112=C:\path\to\metamod-source
+set HL2SDKCS2=...\lab\sdk\hl2sdk-cs2
+set MMSOURCE112=...\lab\sdk\metamod-source
 set AEGIS_ACCOUNT_SALT=your-long-random-server-secret
+lab\build-plugin.bat
+lab\start-lab.bat
 ```
 
-```bat
-cmake -S plugins/cs2 -B plugins/cs2/build -G "Visual Studio 17 2022" -A x64 ^
-  -DAEGIS_WITH_METAMOD=ON
-cmake --build plugins/cs2/build --config Release
-```
+## 2. Schema fields (`sdk_bridge.cpp` / `schema_offset.cpp`)
 
-## 2. Schema fields (`sdk_bridge.cpp`)
+Resolved at runtime via `ISchemaSystem` → `server.dll` type scope (no hardcoded offsets).
 
 | Accessor | Schema class | Field | Notes |
 |---|---|---|---|
-| `read_eye_angles` | `CCSPlayerPawn` | `m_angEyeAngles` | degrees; negative pitch = up |
-| `read_aim_punch` | `CCSPlayerPawn` | `m_aimPunchAngle` | **accumulated**, not delta |
-| `read_origin` | `CBasePlayerPawn` / pawn | `m_vOldOrigin` or abs origin | Hammer units |
-| `read_velocity` | pawn | `m_vecAbsVelocity` | units/s |
-| `read_health` / armor | pawn | `m_iHealth` / `m_ArmorValue` | |
-| `read_weapon_defindex` | active weapon | item def index | |
-| `read_buttons` | pawn services | button state | map to `btn::*` |
-| `read_shots_fired` | pawn | spray counter | |
+| eye | `CCSPlayerPawn` / `CCSPlayerPawnBase` | `m_angEyeAngles` | degrees |
+| punch | `CCSPlayerPawn` | `m_aimPunchAngle` | accumulated |
+| origin | `CBasePlayerPawn` | `m_vOldOrigin` | Hammer units |
+| velocity | `CBaseEntity` | `m_vecAbsVelocity` | |
+| health / armor | pawn | `m_iHealth` / `m_ArmorValue` | |
+| shots fired | pawn | `m_iShotsFired` | |
+| weapon | event name → defindex table | — | tick uses last fire |
 
 ## 3. Hooks (`aegis_mm.cpp`)
 
-1. `SH_ADD_HOOK` `IServerGameDLL::GameFrame` → `Hook_GameFrame` → `runtime_.tick_from_sdk`.
-2. `IGameEventManager2::AddListener` for `round_start`, `weapon_fire`, `player_hurt`, `player_death`, `player_connect_full`, `player_disconnect`.
-3. On `weapon_fire`: call `sdk::snapshot_fire(pawn)` **before** any post-shot mutation, then `runtime_.on_weapon_fire(...)`.
-4. On map start: run one TraceShape self-test; only then `sdk::mark_vis_ready(true)`.
+1. `SH_ADD_HOOK` `IServerGameDLL::GameFrame` → tick frames (~16 Hz).
+2. `OnLevelInit` / `OnLevelShutdown` → `hdr` session.
+3. `ClientActive` / `ClientDisconnect` / `OnClientConnected` → roster.
+4. `CGameEventManager::LoadEventsFromFile` DVPHOOK → capture `IGameEventManager2*` (resolved via game `server.dll` address, not MetaMod's stub).
+5. Listeners: `weapon_fire`, `player_hurt`, `player_death`, `player_spawn`, …
 
 ## 4. Visibility
 
-- Rate ≤ 16 Hz, pair debounce ≥ 100 ms (already in `VisWorker`).
-- If TraceShape is unavailable: leave `vis_ready=false` so `hdr.no_vis=true`.
-- **Never** synthesise LOS.
+- Still **disabled** — public SDK has no TraceShape.
+- Plugin sets `hdr.no_vis=true`; Python adapter drops VISIBILITY capability.
 
 ## 5. Smoke without full SDK
 
 ```bat
 cmake -S plugins/cs2 -B plugins/cs2/build-tools -DAEGIS_TOOLS_ONLY=ON
 cmake --build plugins/cs2/build-tools --config Release
-```
-
-Then against a running Python ingest:
-
-```bat
-aegis ingest --port 9100 --capture-dir data/captures
-aegis simulate --aegis-capture --out data/sample_session
 ```

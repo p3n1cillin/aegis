@@ -12,3 +12,5 @@ dist/
 scratch/
 plugins/cs2/build/
 plugins/cs2/build-tools/
+plugins/cs2/build-mm/
+/lab/
