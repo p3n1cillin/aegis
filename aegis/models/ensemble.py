@@ -16,6 +16,7 @@ ever call a raw model.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -281,10 +282,24 @@ class CalibratedEnsemble:
             }, indent=2),
             encoding="utf-8",
         )
+        # Fail-closed signing: when an operator holds a model key, every save
+        # is signed so downstream loads can verify (see models/signing.py).
+        key = os.environ.get("AEGIS_MODEL_KEY", "")
+        if key:
+            from .signing import sign_model_dir
+
+            sign_model_dir(path, key.encode("utf-8"))
 
     @classmethod
     def load(cls, path: str | Path, device: str | None = None) -> "CalibratedEnsemble":
         path = Path(path)
+        # Verify BEFORE touching any artefact -- a tampered tabular.joblib is
+        # the cleanest attack on this platform (see models/signing.py).
+        key = os.environ.get("AEGIS_MODEL_KEY", "")
+        if key:
+            from .signing import verify_model_dir
+
+            verify_model_dir(path, key.encode("utf-8"))
         meta = json.loads((path / "ensemble.json").read_text(encoding="utf-8"))
         spec = FeatureSpec.from_dict(meta["spec"])
         tabular = TabularGBDT.load(path)

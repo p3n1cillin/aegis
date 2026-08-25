@@ -6,6 +6,7 @@ stable; everything here must also stay fast (< a few seconds each).
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -346,4 +347,70 @@ def test_per_title_alpha_never_relaxes_below_global():
     v = adj.decide(st, score, prior, title="tarkov")
     assert v.band.value == "ban"
     assert any("conformal_p" in r for r in v.reasons)
+
+
+# ---------------------------------------------------------------------------
+# Loop 6 -- signed model artefacts
+# ---------------------------------------------------------------------------
+
+
+def test_model_signing_detects_tamper(tmp_path, monkeypatch):
+    """sign -> verify ok; flip one byte in an artefact -> verify raises;
+    wrong key -> raises; missing signature -> raises."""
+    from aegis.models.signing import SIGNATURE_FILE, sign_model_dir, verify_model_dir
+
+    art = tmp_path / "artefacts"
+    art.mkdir()
+    (art / "tabular.joblib").write_bytes(b"\x00\x01\x02fake-model-bytes")
+    (art / "ensemble.json").write_text('{"spec": {}}', encoding="utf-8")
+
+    key = b"operator-key"
+    payload = sign_model_dir(art, key)
+    assert payload["files"] == ["ensemble.json", "tabular.joblib"]
+    got = verify_model_dir(art, key)  # clean roundtrip
+    assert got["digest"] == payload["digest"]
+
+    # Tamper with a covered artefact.
+    data = bytearray((art / "tabular.joblib").read_bytes())
+    data[1] ^= 0xFF
+    (art / "tabular.joblib").write_bytes(bytes(data))
+    with pytest.raises(PermissionError):
+        verify_model_dir(art, key)
+
+    # Wrong key must not pass either.
+    sign_model_dir(art, key)  # restore genuine signature over tampered file
+    (art / "ensemble.json").write_text('{"spec": {"x": 1}}', encoding="utf-8")
+    with pytest.raises(PermissionError):
+        verify_model_dir(art, b"other-key")
+
+    # Missing signature is itself fail-closed.
+    (art / SIGNATURE_FILE).unlink()
+    with pytest.raises(PermissionError):
+        verify_model_dir(art, key)
+
+
+def test_ensemble_save_load_honours_aegis_model_key(tmp_path, monkeypatch):
+    """With AEGIS_MODEL_KEY set: save signs automatically and load verifies;
+    a post-save edit to an artefact makes load refuse (fail closed)."""
+    ens = _load_ensemble()
+    out = tmp_path / "signed_models"
+
+    monkeypatch.setenv("AEGIS_MODEL_KEY", "test-key-123")
+    ens.save(out)
+    again = CalibratedEnsemble.load(out)  # verifies cleanly
+    assert again.digest == ens.digest
+
+    # Tamper after signing.
+    cfg_path = out / "ensemble.json"
+    raw = json.loads(cfg_path.read_text(encoding="utf-8"))
+    raw["prior"] = 0.9  # attacker's move: inflate the prior
+    cfg_path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(PermissionError):
+        CalibratedEnsemble.load(out)
+
+    # No env var -> legacy friction-free behaviour.
+    monkeypatch.delenv("AEGIS_MODEL_KEY", raising=False)
+    ens.save(out)
+    CalibratedEnsemble.load(out)
+
 

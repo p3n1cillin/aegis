@@ -36,6 +36,99 @@ SIM_CAPS = frozenset({
     Capability.MOVEMENT_INPUT, Capability.BUTTONS, Capability.AIM_TARGET,
 })
 
+# What basically any integration provides from tick one -- dropping these
+# would not be a "partial capability" session, it would not be a usable one.
+CORE_CAPS = frozenset({
+    Capability.VIEW_ANGLES, Capability.HIGH_RATE_VIEW, Capability.POSITIONS,
+    Capability.SHOTS,
+})
+OPTIONAL_CAPS = tuple(SIM_CAPS - CORE_CAPS)
+
+
+def sample_session_profile(rng: np.random.Generator, base_duration_s: float,
+                             dropout: float, short_session_prob: float,
+                             ) -> tuple[set[Capability], float]:
+    """Capability set and duration for one session, drawn jointly.
+
+    Sampling these two independently (as an earlier version of this function
+    did) makes the joint "short clip AND minimal capabilities" case --
+    exactly what a real highlight clip, attacker-only replay, or kill-window
+    export actually looks like -- only `short_session_prob * dropout * 0.5`
+    of sessions, compounding two already-small probabilities into one that's
+    too rare to matter (at the defaults, roughly 2 of 64 training sessions).
+    Verified directly: even after both the capability and duration fixes
+    shipped independently, the trained GBDT's output for real held-out data
+    matching that joint profile was *completely insensitive* to the actual
+    feature values (randomly rescaling every populated real feature by
+    0.2x-3x, independently, left the output unchanged to 4 decimal places) --
+    conclusive evidence that the joint profile still doesn't get enough
+    distinct training examples to learn real splits, only enough to end up
+    on some single, coarse, undertrained leaf. Explicitly guaranteeing the
+    joint case its own slice of sessions is the fix that's actually implied
+    by that result; see COMPARISON.md.
+    """
+    if rng.random() < short_session_prob * 0.5:
+        return set(CORE_CAPS), float(rng.uniform(3.0, 15.0))
+    return sample_session_caps(rng, dropout), sample_session_duration(rng, base_duration_s, short_session_prob)
+
+
+def sample_session_duration(rng: np.random.Generator, base_duration_s: float,
+                              short_session_prob: float) -> float:
+    """Occasionally sample a short-clip duration instead of a full match.
+
+    Found the hard way: every training session used to be a 45-90s "full
+    match," so a genuinely short session (a single ~4.7s kill-window clip --
+    exactly what a highlight reel, a demo snippet, or a live feed's first
+    few seconds after (re)connecting looks like) was out of distribution on
+    *duration* alone, independent of capability sparsity. Confirmed directly:
+    a synthetic session simulated at the real clip's actual duration
+    reproduced the identical saturated score multiple *different* labelled
+    families landed on, using the exact same trained model that had already
+    been fixed for capability sparsity. Spectral features are the most
+    exposed -- a Welch PSD estimated from ~300 ticks is a different
+    statistical object than one from ~5000, and the model had only ever
+    seen the latter.
+    """
+    if rng.random() < short_session_prob:
+        return float(rng.uniform(3.0, 15.0))
+    return base_duration_s
+
+
+def sample_session_caps(rng: np.random.Generator, dropout: float) -> set[Capability]:
+    """One session's honest capability set for training.
+
+    Every synthetic session used to be extracted with the full ``SIM_CAPS``
+    set, every time -- the model never once saw the partial-capability,
+    heavily-NaN feature vector that any non-CS2 generic_fps integration, or
+    even a CS2 session with ``no_vis`` or an unattested client, actually
+    produces. Confirmed against real (non-synthetic) human data: fed such a
+    vector, the tabular model saturated to ~1.0 "cheat" confidence for two
+    distinct real accounts regardless of their true label, because the
+    missingness *pattern* itself was out of distribution, not because of
+    anything in the populated columns.
+
+    Real integrations drop capabilities in *correlated blocks*, not
+    independently -- a demo-only feed lacks visibility, damage, hitgroups,
+    recoil, movement input, buttons, and aim_target all at once, because
+    they all come from the same missing live-plugin channel, not from eight
+    independent coin flips. An earlier version of this function dropped each
+    optional capability independently, which made the all-core-only profile
+    a 0.3**8 =~ 0.00007 event -- meaning it still, for practical purposes,
+    never appeared in a training run, and the saturation this function
+    exists to fix was still measured after that version shipped. Explicitly
+    weighting the minimal profile fixes that.
+    """
+    r = rng.random()
+    if r < dropout * 0.5:
+        return set(CORE_CAPS)  # minimal profile, explicitly guaranteed representation
+    if r < dropout:
+        caps = set(CORE_CAPS)
+        for cap in OPTIONAL_CAPS:
+            if rng.random() < 0.5:
+                caps.add(cap)
+        return caps
+    return set(SIM_CAPS)
+
 
 @dataclass
 class Dataset:
@@ -103,13 +196,28 @@ def generate_dataset(
     feature_cfg: FeatureConfig | None = None,
     build_engagements: bool = True,
     families: tuple[str, ...] | None = None,
+    capability_dropout: float = 0.3,
+    short_session_prob: float = 0.2,
 ) -> Dataset:
-    """Simulate ``n_sessions`` matches and extract features."""
+    """Simulate ``n_sessions`` matches and extract features.
+
+    ``capability_dropout`` controls what fraction of *optional* capabilities
+    (everything outside ``CORE_CAPS``) each session independently drops,
+    training the model on a realistic mix of full- and partial-capability
+    inputs instead of only ever seeing every channel populated.
+    ``short_session_prob`` is the fraction of sessions simulated as a short
+    (3-15s) clip instead of a full ``duration_s`` match -- see
+    ``sample_session_duration`` for why this matters as much as capability
+    sparsity does. Set either to 0.0 to reproduce the old
+    (validated-to-be-out-of-distribution-on-real-data) behaviour.
+    """
     rng = np.random.default_rng(seed)
     feature_cfg = feature_cfg or FeatureConfig()
     families = families or tuple(f for f in CHEAT_FAMILIES if f != "clean")
-    caps = set(SIM_CAPS)
-    spec = build_spec(caps)
+    # spec is built from the full capability set so the column layout stays
+    # fixed regardless of which extractors a given session's caps satisfy --
+    # per-session extraction below still writes NaN for anything gated out.
+    spec = build_spec(set(SIM_CAPS))
 
     rows = []
     fam_out: list[str] = []
@@ -122,24 +230,33 @@ def generate_dataset(
 
     for i in range(n_sessions):
         lobby = make_lobby(rng, cheat_rate=cheat_rate, families=families, size=lobby_size)
+        sess_caps, sess_duration = sample_session_profile(
+            rng, duration_s, capability_dropout, short_session_prob,
+        )
         # Guarantee at least some clean + some cheats across the run.
         sess, labels = simulate_session(
             session_id=f"sim_{seed}_{i:04d}",
             cheat_families=lobby,
-            duration_s=duration_s,
+            duration_s=sess_duration,
             seed=int(rng.integers(0, 2**31 - 1)),
         )
-        feats = extract_session_features(sess, caps, cfg=feature_cfg, spec=spec)
+        feats = extract_session_features(sess, sess_caps, cfg=feature_cfg, spec=spec)
         for f in feats:
             lab = labels.get(f.slot, "clean")
+            # Record the family *name* (e.g. "aim_smoothing"), not the
+            # collapsed behaviour label ("aimbot"): per-family recall must be
+            # able to see the extreme-humanised closet profile separately
+            # from mid-range aimbots, or evaluation silently averages the
+            # hardest case away.
+            fam = lobby[f.slot] if f.slot < len(lobby) else lab
             rows.append(f)
-            fam_out.append(lab)
+            fam_out.append(fam)
             pids.append(f.player_id)
             sids.append(f.session_id)
 
         if build_engagements:
             tensors = extract_engagement_tensors(
-                sess, caps, cfg=feature_cfg, seq_len=seq_len,
+                sess, sess_caps, cfg=feature_cfg, seq_len=seq_len,
                 max_per_player=max_eng_per_player,
             )
             for t in tensors:
