@@ -139,3 +139,77 @@ def test_full_capability_aimbot_still_scored_by_tabular():
         f"full-capability coverage {sc.meta['coverage']:.2f} should sit above "
         "the 0.5 no-op floor"
     )
+
+
+# ---------------------------------------------------------------------------
+# Loop 3 -- simulator realism (aim_smoothing family + network jitter)
+# ---------------------------------------------------------------------------
+
+
+def test_aim_smoothing_family_simulates_and_labels():
+    """The extreme-humanised closet profile must produce a valid canonical
+    session under a distinct label, with every humaniser knob actually on."""
+    from aegis.adapters.base import validate_session
+    from aegis.adapters.cs2.adapter import CS2Adapter
+
+    sess, labels = simulate_session(
+        session_id="t_smooth",
+        cheat_families=["clean", "aim_smoothing", "clean", "aim_smoothing"],
+        duration_s=10.0,
+        seed=21,
+    )
+    adapter = CS2Adapter()
+    problems = validate_session(sess, adapter, strict=False)
+    assert not any("native units" in p for p in problems)
+    cheat_slots = [s for s, lab in labels.items() if "aimbot" in lab]
+    assert len(cheat_slots) == 2
+    for slot in cheat_slots:
+        cfg = sess.meta["cheat_configs"][slot]
+        assert cfg.aimbot and cfg.aimbot_retain_tremor
+        assert cfg.aimbot_smooth_ticks >= 16
+        assert cfg.aimbot_delay_s >= 0.18
+        assert cfg.aimbot_fov <= 6.0
+
+
+def test_network_jitter_preserves_monotonic_timebase():
+    """Jittered tick timestamps must stay monotonic per player, non-negative,
+    bounded by max_ms displacement, and still pass units validation."""
+    from aegis.adapters.base import validate_session
+    from aegis.adapters.cs2.adapter import CS2Adapter
+
+    MAX_MS = 20.0
+    sess, _ = simulate_session(
+        session_id="t_jitter",
+        cheat_families=["clean"] * 4,
+        duration_s=6.0,
+        seed=22,
+        net_jitter_ms=MAX_MS,
+    )
+    ticks = sess.ticks
+    for slot in np.unique(ticks["slot"]):
+        t = np.sort(ticks["t"][ticks["slot"] == slot])
+        assert np.all(np.diff(t) >= -1e-9), f"slot {slot}: jitter broke monotonicity"
+    assert np.all(ticks["t"] >= 0.0)
+
+    # Boundedness: no timestamp may move by more than max_ms from its grid.
+    dt = 1.0 / sess.tickrate
+    grid = ticks["tick"].astype(np.float64) * dt
+    assert np.max(np.abs(ticks["t"] - grid)) <= MAX_MS / 1000.0 + 1e-6
+
+    adapter = CS2Adapter()
+    problems = validate_session(sess, adapter, strict=False)
+    assert not any("monotonic" in p.lower() for p in problems)
+
+
+def test_network_jitter_changes_timestamps_but_not_ordering():
+    """Sanity: jitter actually displaces times (otherwise the robustness
+    claim above is vacuous) while leaving tick/step indices untouched."""
+    clean, _ = simulate_session(
+        session_id="t_j_a", cheat_families=["clean"] * 2, duration_s=4.0, seed=23,
+    )
+    noisy, _ = simulate_session(
+        session_id="t_j_b", cheat_families=["clean"] * 2, duration_s=4.0, seed=23,
+        net_jitter_ms=30.0,
+    )
+    assert np.array_equal(clean.ticks["tick"], noisy.ticks["tick"])
+    assert not np.allclose(clean.ticks["t"], noisy.ticks["t"])

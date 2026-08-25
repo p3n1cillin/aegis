@@ -34,6 +34,7 @@ def train_ensemble(
     *,
     out_dir: str | Path | None = None,
     skip_temporal: bool = False,
+    tabular_params: dict | None = None,
 ) -> tuple[CalibratedEnsemble, dict]:
     cfg = cfg or AegisConfig()
     out_dir = Path(out_dir or cfg.model_dir)
@@ -43,10 +44,13 @@ def train_ensemble(
     report: dict = {
         "n_train": int(train.y.size), "n_cal": int(cal.y.size), "n_test": int(test.y.size),
         "n_train_eng": int(train.eng_y.size), "cheat_rate_train": float(train.y.mean()) if train.y.size else 0.0,
+        "tabular_params": tabular_params or {},
     }
 
     # ---- tabular --------------------------------------------------------
-    tab = TabularGBDT.train(train.X, train.y, ds.spec, seed=cfg.model.seed)
+    tab = TabularGBDT.train(
+        train.X, train.y, ds.spec, seed=cfg.model.seed, **(tabular_params or {})
+    )
     raw_cal_tab = tab.predict_proba(cal.X)
     cal_tab = ProbabilityCalibrator.fit(raw_cal_tab, cal.y)
     report["tabular_ece"] = expected_calibration_error(cal_tab.transform(raw_cal_tab), cal.y)
@@ -65,6 +69,7 @@ def train_ensemble(
             raw_cal_temp = temporal.predict_proba(cal.eng_X, cal.eng_scalars)
             cal_temp = ProbabilityCalibrator.fit(raw_cal_temp, cal.eng_y)
             report["temporal_ece"] = expected_calibration_error(cal_temp.transform(raw_cal_temp), cal.eng_y)
+            report["cheat_rate_cal_engagements"] = float(cal.eng_y.mean())
 
     # ---- novelty (clean only) -------------------------------------------
     clean_mask = train.y == 0
@@ -89,10 +94,21 @@ def train_ensemble(
     conformal = ConformalGate.fit(clean_cal, alpha=cfg.fusion.alpha)
     report["conformal_threshold"] = conformal.threshold()
 
+    # eng_prior must match the population cal_temp was actually fit against
+    # (engagement-level), not the session-level `prior` below -- see
+    # ModelBundle.eng_prior for why conflating the two produces a systematic
+    # per-engagement LLR bias that SPRT turns into an eventual false ban for
+    # every player, cheater or not.
+    eng_prior = (
+        float(max(0.02, min(0.4, cal.eng_y.mean())))
+        if cal_temp is not None and cal.eng_y.size
+        else float(max(0.02, min(0.2, train.y.mean())))
+    )
     bundle = ModelBundle(
         tabular=tab, temporal=temporal, novelty=novelty,
         cal_tabular=cal_tab, cal_temporal=cal_temp, conformal=conformal,
         prior=float(max(0.02, min(0.2, train.y.mean()))),
+        eng_prior=eng_prior,
     )
     ensemble = CalibratedEnsemble(bundle=bundle, spec=ds.spec)
     ensemble.save(out_dir)
@@ -115,6 +131,7 @@ def bootstrap_train(
     out_dir: str | Path = "models",
     cfg: AegisConfig | None = None,
     skip_temporal: bool = False,
+    tabular_params: dict | None = None,
 ) -> tuple[CalibratedEnsemble, dict]:
     """End-to-end: simulate -> split -> train -> evaluate -> save."""
     cfg = cfg or AegisConfig(model_dir=str(out_dir))
@@ -124,4 +141,7 @@ def bootstrap_train(
     )
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     ds.save(Path(out_dir) / "dataset")
-    return train_ensemble(ds, cfg, out_dir=out_dir, skip_temporal=skip_temporal)
+    return train_ensemble(
+        ds, cfg, out_dir=out_dir, skip_temporal=skip_temporal,
+        tabular_params=tabular_params,
+    )

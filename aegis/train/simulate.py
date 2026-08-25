@@ -163,7 +163,10 @@ class AimProfile:
 
     @staticmethod
     def sample(rng: np.random.Generator, skill: float | None = None) -> "AimProfile":
-        s = float(rng.beta(2.2, 2.2)) if skill is None else float(skill)
+        # Beta(1.8, 1.8) rather than the original Beta(2.2, 2.2): slightly
+        # heavier low/high-skill tails so clean players are more heterogeneous
+        # and detectors are not tuned against a suspiciously uniform human.
+        s = float(rng.beta(1.8, 1.8)) if skill is None else float(skill)
         return AimProfile(
             skill=s,
             reaction_mu=float(np.clip(rng.normal(0.255 - 0.085 * s, 0.022), 0.135, 0.400)),
@@ -281,11 +284,31 @@ def sample_cheat(rng: np.random.Generator, family: str) -> CheatConfig:
             norecoil_strength=float(rng.uniform(0.5, 1.0)),
             norecoil_jitter=float(rng.uniform(0.0, 0.5)),
         )
+    if family == "aim_smoothing":
+        # The hardest humanised profile in the roster: every humaniser knob
+        # pushed to the plausible end of its range simultaneously. Where
+        # ``aimbot_legit`` samples moderate settings, this is what a
+        # "undetectable" marketed config actually looks like -- tiny FOV,
+        # heavy smoothing, long artificial delay, tremor retained, aim placed
+        # off-bone. Exists so per-family recall is reported against a
+        # worst-case closet cheat, not just mid-range ones.
+        return CheatConfig(
+            aimbot=True,
+            aimbot_fov=float(rng.uniform(2.5, 6.0)),
+            aimbot_smooth_ticks=int(rng.integers(16, 26)),
+            aimbot_strength=float(rng.uniform(0.25, 0.45)),
+            aimbot_jitter_deg=float(rng.uniform(0.4, 1.0)),
+            aimbot_delay_s=float(rng.uniform(0.18, 0.28)),
+            aimbot_retain_tremor=True,
+            aimbot_bone_offset=float(rng.uniform(0.10, 0.18)),
+            triggerbot=bool(rng.random() < 0.25),
+            triggerbot_delay_s=float(rng.uniform(0.04, 0.10)),
+        )
     raise ValueError(f"unknown cheat family {family!r}")
 
 
 CHEAT_FAMILIES = ("clean", "blatant", "spinbot", "aimbot_legit", "triggerbot",
-                  "wallhack", "norecoil", "bhop", "adaptive")
+                  "wallhack", "norecoil", "bhop", "adaptive", "aim_smoothing")
 
 
 # --------------------------------------------------------------------------
@@ -409,6 +432,39 @@ def _ang_err(p1, y1, p2, y2) -> float:
 # --------------------------------------------------------------------------
 
 
+def network_jitter_times(
+    t: np.ndarray,
+    rng: np.random.Generator,
+    max_ms: float = 30.0,
+) -> np.ndarray:
+    """Bounded random-walk jitter on a monotonic time vector (network delay).
+
+    Models what the behavioural layer actually receives on a real deployment:
+    tick timestamps displaced by accumulating network/processing delay, not a
+    clean simulation clock. The walk is clamped to +/-``max_ms`` and the
+    result is re-monotonised (and clamped >= 0) so downstream timebase
+    validation still passes; per-player event ordering within one tick is
+    preserved because every row sharing a step gets the same displacement.
+
+    Deliberately NOT applied by default: it exists so evaluation can measure
+    detector robustness to realistic transport noise, and so a future ingest
+    path can be tested against degraded timestamps.
+    """
+    t = np.asarray(t, dtype=np.float64)
+    if t.size < 2 or max_ms <= 0.0:
+        return t.copy()
+    sigma_ms = max_ms / 4.0  # walk std; clamping keeps tails inside max_ms
+    steps = np.diff(t)
+    walk = np.concatenate([
+        [0.0],
+        np.cumsum(rng.normal(0.0, sigma_ms / 1000.0, size=steps.size)),
+    ])
+    walk = np.clip(walk, -max_ms / 1000.0, max_ms / 1000.0)
+    out = t + walk
+    # Re-monotonise: jitter must delay packets, never reorder them.
+    return np.maximum.accumulate(np.maximum(out, 0.0))
+
+
 def simulate_session(
     session_id: str,
     cheat_families: list[str],
@@ -417,12 +473,15 @@ def simulate_session(
     seed: int = 0,
     game: str = "cs2",
     n_per_team: int | None = None,
+    net_jitter_ms: float | None = None,
 ) -> tuple[Session, dict[int, str]]:
     """Run one synthetic match.
 
     ``cheat_families`` gives one family name per player; team assignment
     alternates. Returns the canonical ``Session`` and a slot -> label map for
-    supervision.
+    supervision. ``net_jitter_ms`` (off by default) displaces tick timestamps
+    with a bounded random walk before returning -- see
+    ``network_jitter_times``.
     """
     rng = np.random.default_rng(seed)
     walls, waypoints = default_map(rng)
@@ -751,6 +810,15 @@ def simulate_session(
         meta={"max_run_speed": MAX_SPEED, "synthetic": True, "attested": False},
     )
     labels = {a.slot: a.cheat.label() for a in agents}
+    if net_jitter_ms:
+        # Jitter the step grid once, then map every tick row through its step
+        # index -- rows sharing a step share a timestamp, so per-player
+        # ordering is preserved (see network_jitter_times).
+        n_steps = int(duration_s / dt)
+        grid = network_jitter_times(
+            np.arange(n_steps) * dt, rng, max_ms=float(net_jitter_ms)
+        )
+        session.ticks["t"] = grid[np.clip(session.ticks["tick"], 0, n_steps - 1)]
     session.meta["cheat_configs"] = {a.slot: a.cheat for a in agents}
     session.meta["aim_profiles"] = {a.slot: a.profile for a in agents}
     return session, labels
@@ -795,7 +863,8 @@ def _write_tick(arr, i, t, step, a: Agent, dead: bool) -> None:
 
 def make_lobby(rng: np.random.Generator, cheat_rate: float = 0.25,
                families: tuple[str, ...] = ("aimbot_legit", "triggerbot", "wallhack",
-                                            "norecoil", "adaptive", "blatant"),
+                                            "norecoil", "adaptive", "blatant",
+                                            "aim_smoothing"),
                size: int = 6) -> list[str]:
     """Sample one lobby's worth of family labels."""
     out = []
