@@ -29,13 +29,16 @@ Repo: https://github.com/p3nicillin/aegis
 
 ```bash
 pip install -e ".[dev]"   # or: pip install -e . && pip install pytest
-aegis train --sessions 48 --duration 75 --out models
+aegis train --sessions 384 --min-samples-leaf 8 --max-depth 6 --learning-rate 0.1 --out models
 aegis evaluate --model-dir models --stealth-curve
 aegis simulate --aegis-capture --out data/sample_session
 aegis ingest --model-dir models --capture-dir data/captures --port 9100
 aegis serve --model-dir models
+aegis audit --tail 20
 pytest -q
 ```
+
+(The scale-up command reflects the sweep winner from entry 38; plain `aegis train` still works with library defaults but leaves measured performance on the table.)
 
 Artefacts land in `models/`: `ensemble.json`, `tabular.*`, `temporal.pt`, `novelty.pt`, calibrators, `conformal.npz`, `train_report.json`, `eval.json`, optional `dataset/`.
 
@@ -78,14 +81,15 @@ Artefacts land in `models/`: `ensemble.json`, `tabular.*`, `temporal.pt`, `novel
 
 ## Next work (priority order)
 
-1. **Real-data score collapse — root cause fully understood, needs real data or an architectural change to actually fix** (see entry 34 / `COMPARISON.md`). Confirmed not a test-harness artefact (real-opponent-data test ruled that out conclusively) and not fixable by further synthetic sampling tricks (capability dropout, duration variation, joint sampling, and a 3.4x larger training set all failed to give the GBDT real sensitivity in this exact NaN-pattern region — `min_samples_leaf=40` structurally limits how much a rare profile's sampling probability can help within a training set this size). Two real remaining options: (a) a real labelled dataset large enough to actually calibrate against — orders of magnitude more than 33 segments from 2 accounts; (b) a dedicated code path for zero-engagement / sparse-capability sessions (e.g. always shrink hard toward the prior, or skip the tabular channel entirely) rather than asking one GBDT to handle every profile. Also verify whether the same insensitivity affects sessions with enough engagements to clear `min_engagements_for_ban=40` — not tested, and the "watch-band only" mitigating context in `COMPARISON.md` assumes it doesn't generalize past the zero-engagement case, which is itself unverified.
+1. ~~**Real-data score collapse — root cause fully understood, needs real data or an architectural change to actually fix** (see entry 34 / `COMPARISON.md`).~~ — **architectural half is done** (entry 37's `sparse_session_policy` implements option (b); the sweep's `min_samples_leaf=8` in entry 38 attacks the structural cause). Remaining: option (a) — a real labelled dataset large enough to calibrate against.
 2. **TraceShape / visibility** — last unwired schema/hook gap (see `plugins/cs2/SDK_WIRING.md` §4). Everything else on the live-telemetry checklist (eye angles, punch, origin, GameFrame, game events) is now verified against a real dedicated server.
-3. **Fit on real negatives** from plugin captures before touching ban thresholds — `lab/captures/` now has real (unlabelled, bot-vs-bot) sessions to start with; still need human/non-bot captures before any operating point is trustworthy.
+3. **Fit on real negatives** from plugin captures before touching ban thresholds — `lab/captures/` now has real (unlabelled, bot-vs-bot) sessions to start with; still need human/non-bot captures before any operating point is trustworthy. The `/v1/reviews` + `/review` queue (entries 45/47) is the intake path for labels once review begins.
 4. ~~Client attestation module (separate binary) speaking `integrity/attest.py`~~ — **done as a reference implementation** (`client/`, see entry 36). Real work remains for production: a server-held baseline registry for `module_hash` (right now nothing validates the hash *against* anything), more/stronger `input_stack` probes, and real per-device key provisioning instead of the lab shared secret.
-5. Review UI / queue that appends `ReviewLabel` rows and calls `aegis online-refresh`.
-6. Per-title conformal gates (do not share α operating points across games).
-7. Expand simulator maps / network jitter once real telemetry shows residual error modes.
-8. Hardening: auth on the API (**done** — `AEGIS_API_KEY` + `X-Aegis-Api-Key`, checked on every `/v1/*` route; also closed an arbitrary-file-read via `AnalyzeRequest.source` accepting an unrestricted filesystem path — now containment-checked against `allowed_source_dir`, see `service/__init__.py::_resolve_source_path`), signed model artefacts, audit log for every issued verdict.
+5. ~~Review UI / queue that appends `ReviewLabel` rows and calls `aegis online-refresh`.~~ — **done** (`POST /v1/reviews`, guarded `/v1/reviews/refresh`, `GET /review?key=` console; entries 45–47). Polish (pagination, roles, appeals) deferred until there are real reviewers.
+6. ~~Per-title conformal gates (do not share α operating points across games).~~ — **done** (`FusionConfig.per_title_alpha`, entry 43). Populating each title's α from *its own* negatives happens under item 3.
+7. ~~Expand simulator maps / network jitter once real telemetry shows residual error modes.~~ — jitter landed early (entry 39: `net_jitter_ms`) so robustness can be measured before real telemetry arrives; new maps still open.
+8. ~~Hardening: auth on the API, signed model artefacts, audit log for every issued verdict.~~ — **done**: auth + path containment (entry 28), audit log (entry 42), HMAC-signed artefacts via `AEGIS_MODEL_KEY` (entry 44).
+9. **Calibration quality on the harder simulator** — ECE rose to ~0.18–0.20 after entry 40's retrain (from 0.103). Candidates: larger calibration split share at high session counts; recalibration check inside `online-refresh`; per-capability-band calibrators. Measure before tuning.
 
 ## Invariants — do not break
 

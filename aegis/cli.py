@@ -31,6 +31,11 @@ def main(argv: list[str] | None = None) -> int:
     p_train.add_argument("--out", type=str, default="models")
     p_train.add_argument("--skip-temporal", action="store_true")
     p_train.add_argument("--device", type=str, default="cpu")
+    # TabularGBDT knobs -- defaults are the pre-sweep values; the sweep
+    # winner (lab/sweep_gbdt.py) was min-samples-leaf 8 / depth 6 / lr 0.1.
+    p_train.add_argument("--min-samples-leaf", type=int, default=None)
+    p_train.add_argument("--max-depth", type=int, default=None)
+    p_train.add_argument("--learning-rate", type=float, default=None)
 
     p_eval = sub.add_parser("evaluate", help="evaluate a saved ensemble")
     p_eval.add_argument("--model-dir", type=str, default="models")
@@ -79,10 +84,18 @@ def main(argv: list[str] | None = None) -> int:
         from .train.train import bootstrap_train
 
         cfg = AegisConfig(model_dir=args.out, model=ModelConfig(device=args.device))
+        tabular_params = {
+            k: v for k, v in {
+                "min_samples_leaf": args.min_samples_leaf,
+                "max_depth": args.max_depth,
+                "learning_rate": args.learning_rate,
+            }.items() if v is not None
+        }
         print(f"[aegis] simulating {args.sessions} sessions @ {args.duration}s ...")
         ens, report = bootstrap_train(
             n_sessions=args.sessions, duration_s=args.duration, seed=args.seed,
             out_dir=args.out, cfg=cfg, skip_temporal=args.skip_temporal,
+            tabular_params=tabular_params or None,
         )
         print(json.dumps({k: report[k] for k in report if k != "temporal_history"}, indent=2, default=str))
         if "test" in report:
