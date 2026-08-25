@@ -75,6 +75,77 @@ class ReviewRequest(BaseModel):
     p_fused: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
+def _render_review_page(audit_records: list, n_labels: int) -> str:
+    """Minimal server-rendered review console (backlog item 5, UI half).
+
+    Deliberately one static HTML string with zero JS framework: the operator
+    needs a table of recent verdicts and a label form, not an SPA. Auth is
+    the same API key passed as ``?key=`` because browsers cannot set headers
+    on plain navigations.
+    """
+    import html as _html
+
+    rows = "".join(
+        f"<tr><td>{_html.escape(r.ts)}</td>"
+        f"<td>{_html.escape(r.player_id)}</td>"
+        f"<td>{_html.escape(r.session_id)}</td>"
+        f"<td class='{_html.escape(r.verdict)}'>{_html.escape(r.verdict)}</td>"
+        f"<td>{'yes' if r.shadow else 'no'}</td>"
+        f"<td>{r.p_fused:.3f}</td><td>{r.conformal_p:.1e}</td>"
+        f"<td>{r.n_engagements}</td></tr>"
+        for r in reversed(audit_records)
+    ) or "<tr><td colspan='8'>no audit records yet</td></tr>"
+    return f"""<!doctype html>
+<html><head><title>Aegis Review Console</title><style>
+body {{ font-family: system-ui, sans-serif; margin: 2rem; background: #111; color: #ddd; }}
+table {{ border-collapse: collapse; width: 100%; margin-top: 1rem; }}
+th, td {{ border: 1px solid #333; padding: 4px 8px; font-size: 0.85rem; text-align: left; }}
+th {{ background: #1c1c1c; }}
+td.ban, td.integrity_ban {{ color: #f66; font-weight: 600; }}
+td.review {{ color: #fc6; }} td.watch {{ color: #ff9; }} td.clear {{ color: #6c6; }}
+form {{ margin: 1rem 0; display: grid; grid-template-columns: repeat(6, minmax(120px, 1fr)); gap: 8px; max-width: 1100px; }}
+input, select, button {{ padding: 6px; background: #1c1c1c; color: #ddd; border: 1px solid #444; }}
+#msg {{ margin-left: 8px; }}
+</style></head><body>
+<h1>Aegis Review Console</h1>
+<p>Review store: <b>{n_labels}</b> labels accumulated.
+   Submitting a label appends to the queue; model refresh is a separate
+   explicit <code>POST /v1/reviews/refresh</code>.</p>
+<form onsubmit="return submitLabel(this)">
+  <input name="player_id" placeholder="player_id" required>
+  <input name="session_id" placeholder="session_id" required>
+  <select name="y"><option value="1">cheat</option><option value="0">clean</option></select>
+  <input name="family" placeholder="family (optional)">
+  <input name="reviewer" placeholder="reviewer">
+  <button type="submit">Submit label</button>
+  <span id="msg"></span>
+</form>
+<table>
+<thead><tr><th>time</th><th>player</th><th>session</th><th>verdict</th>
+<th>shadow</th><th>p_fused</th><th>conformal p</th><th>eng</th></tr></thead>
+<tbody>{rows}</tbody></table>
+<script>
+async function submitLabel(f) {{
+  const key = new URLSearchParams(location.search).get('key') || '';
+  const body = {{
+    player_id: f.player_id.value, session_id: f.session_id.value,
+    y: parseInt(f.y.value), family: f.family.value, reviewer: f.reviewer.value,
+  }};
+  const resp = await fetch('/v1/reviews', {{
+    method: 'POST',
+    headers: {{ 'Content-Type': 'application/json', 'X-Aegis-Api-Key': key }},
+    body: JSON.stringify(body),
+  }});
+  const msg = document.getElementById('msg');
+  if (resp.ok) {{ msg.textContent = 'label appended'; f.reset(); }}
+  else {{ msg.textContent = 'error ' + resp.status; }}
+  return false;
+}}
+</script>
+</body></html>"""
+
+
+
 def _resolve_source_path(raw: str, allowed_dir: str) -> Path:
     """Only honour a filesystem-path ``source`` if it resolves inside allowed_dir.
 
@@ -256,6 +327,22 @@ def create_app(
             "untrusted": st.untrusted,
             "confirmed_tamper": st.confirmed_tamper,
         }
+
+    @app.get("/review")
+    def review_console(key: str = "") -> Any:
+        """Operator review console (HTML). Key via ?key= since browsers cannot
+        set headers on navigations; compared in constant time."""
+        import hmac as _hmac
+
+        if cfg.api_key and not _hmac.compare_digest(key.encode(), cfg.api_key.encode()):
+            raise HTTPException(401, "invalid or missing ?key=")
+        from fastapi.responses import HTMLResponse
+
+        from ..train.online import OnlineStore
+
+        records = audit.tail(50) if audit is not None else []
+        n_labels = len(OnlineStore.load(cfg.review_store_path).labels)
+        return HTMLResponse(_render_review_page(records, n_labels))
 
     @app.post("/v1/reviews", dependencies=[Depends(require_api_key)])
     def submit_review(req: ReviewRequest) -> dict:

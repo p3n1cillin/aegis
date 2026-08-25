@@ -523,4 +523,68 @@ def test_review_queue_end_to_end(tmp_path):
         time.sleep(0.2)
 
 
+def test_review_console_html_page():
+    """/review serves the operator console behind ?key= auth and renders
+    audit rows; wrong/missing key is refused with 401."""
+    import tempfile
+    import threading
+    import time
+    import urllib.error
+    import urllib.request
+
+    import uvicorn
+
+    from aegis.core.config import AegisConfig
+    from aegis.integrity.audit import AuditLog, AuditRecord
+    from aegis.service import create_app
+
+    if not (MODEL_DIR / "ensemble.json").exists():
+        pytest.skip("models/ not trained yet")
+
+    tmp = Path(tempfile.mkdtemp())
+    audit_path = tmp / "audit.jsonl"
+    AuditLog(audit_path).append(AuditRecord(
+        ts="2026-08-25T12:00:00.000+00:00",
+        session_id="sess-1", player_id="<script>alert(1)</script>",
+        verdict="watch", shadow=True, p_fused=0.61, conformal_p=0.4,
+        reasons=[], model_digest="d", n_engagements=9,
+    ))
+
+    cfg = AegisConfig(model_dir=str(MODEL_DIR))
+    cfg.api_key = "console-key"
+    cfg.policy.audit_log_path = str(audit_path)
+    cfg.review_store_path = str(tmp / "reviews.jsonl")
+    app = create_app(model_dir=str(MODEL_DIR), config=cfg)
+    port = 8241
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error"))
+    threading.Thread(target=server.run, daemon=True).start()
+    for _ in range(50):
+        if server.started:
+            break
+        time.sleep(0.1)
+    try:
+        def _get(url: str) -> tuple[int, str]:
+            try:
+                with urllib.request.urlopen(url, timeout=10) as resp:
+                    return resp.status, resp.read().decode("utf-8")
+            except urllib.error.HTTPError as e:
+                return e.code, e.read().decode("utf-8")
+
+        status, _ = _get(f"http://127.0.0.1:{port}/review")
+        assert status == 401, "console must refuse without the key"
+        status, _ = _get(f"http://127.0.0.1:{port}/review?key=wrong")
+        assert status == 401
+
+        status, body = _get(f"http://127.0.0.1:{port}/review?key=console-key")
+        assert status == 200
+        assert "Aegis Review Console" in body
+        assert "sess-1" in body
+        # The XSS attempt must be escaped, not executable.
+        assert "<script>alert(1)" not in body
+        assert "&lt;script&gt;" in body
+    finally:
+        server.should_exit = True
+        time.sleep(0.2)
+
+
 
