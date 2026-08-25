@@ -29,6 +29,12 @@ from ..models.calibrate import ConformalGate, ProbabilityCalibrator, expected_ca
 from ..models.ensemble import CalibratedEnsemble
 from ..models.novelty import NoveltyAE
 
+# Minimum review labels before an online refresh may replace the
+# bootstrap-fitted calibrators -- same floor as refresh_from_reviews'
+# min_cal_rows. The /v1/reviews/refresh endpoint refuses below this rather
+# than fitting an operating point on a handful of rows.
+MIN_LABELS_FOR_REFRESH = 30
+
 
 @dataclass
 class ReviewLabel:

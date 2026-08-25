@@ -133,6 +133,10 @@ class AegisConfig:
     # is an arbitrary-file-read from any caller who can reach the endpoint --
     # so a path is only honoured if it resolves inside this directory.
     allowed_source_dir: str = "data/captures"
+    # Append-only JSONL of human review labels (train/online.py). The
+    # /v1/reviews endpoint appends here; `aegis online-refresh` (or
+    # POST /v1/reviews/refresh) folds them into calibrators/novelty.
+    review_store_path: str = "data/reviews.jsonl"
 
     @classmethod
     def load(cls, path: str | Path) -> "AegisConfig":
@@ -146,6 +150,7 @@ class AegisConfig:
             model_dir=raw.get("model_dir", "models"),
             api_key=raw.get("api_key", ""),
             allowed_source_dir=raw.get("allowed_source_dir", "data/captures"),
+            review_store_path=raw.get("review_store_path", "data/reviews.jsonl"),
         )
 
     def save(self, path: str | Path) -> None:

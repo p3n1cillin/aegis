@@ -414,3 +414,113 @@ def test_ensemble_save_load_honours_aegis_model_key(tmp_path, monkeypatch):
     CalibratedEnsemble.load(out)
 
 
+# ---------------------------------------------------------------------------
+# Loop 8 -- review-label queue API (backlog item 5)
+# ---------------------------------------------------------------------------
+
+
+def _start_review_server(tmp_path, port: int):
+    """Boot a real uvicorn server with auth + a tmp review store."""
+    import threading
+    import time
+
+    import uvicorn
+
+    from aegis.core.config import AegisConfig
+    from aegis.service import create_app
+
+    cfg = AegisConfig(model_dir=str(MODEL_DIR))
+    cfg.api_key = "review-test-key"
+    cfg.review_store_path = str(tmp_path / "reviews.jsonl")
+    app = create_app(model_dir=str(MODEL_DIR), config=cfg)
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error"))
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    for _ in range(50):
+        if server.started:
+            break
+        time.sleep(0.1)
+    return server
+
+
+def _post_json(port: int, path: str, body: dict, key: str | None) -> tuple[int, str]:
+    import urllib.error
+    import urllib.request
+
+    url = f"http://127.0.0.1:{port}{path}"
+    data = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(url, data=data, method="POST",
+                                 headers={"Content-Type": "application/json"})
+    if key is not None:
+        req.add_header("X-Aegis-Api-Key", key)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status, resp.read().decode("utf-8")
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode("utf-8")
+
+
+def test_review_queue_end_to_end(tmp_path):
+    """POST /v1/reviews requires the API key, appends one JSONL row per call,
+    and /v1/reviews/refresh refuses below MIN_LABELS_FOR_REFRESH."""
+    import tempfile
+    import threading
+    import time
+
+    from aegis.train.online import MIN_LABELS_FOR_REFRESH, OnlineStore
+
+    if not (MODEL_DIR / "ensemble.json").exists():
+        pytest.skip("models/ not trained yet")
+
+    # Ephemeral port: probe a range to dodge concurrent CI runs.
+    server = None
+    for port in (8231, 8232, 8233, 8234):
+        try:
+            server = _start_review_server(tmp_path, port)
+            break
+        except OSError:
+            continue
+    assert server is not None and server.started
+    try:
+        # No key -> 401.
+        status, _ = _post_json(port, "/v1/reviews", {
+            "player_id": "p1", "session_id": "s1", "y": 1,
+        }, key=None)
+        assert status == 401
+
+        # Valid label -> ok; second label increments the count.
+        status, body = _post_json(port, "/v1/reviews", {
+            "player_id": "p1", "session_id": "s1", "y": 1,
+            "family": "aimbot_legit", "reviewer": "alice",
+        }, key="review-test-key")
+        assert status == 200
+        assert json.loads(body)["n_labels"] == 1
+        status, body = _post_json(port, "/v1/reviews", {
+            "player_id": "p2", "session_id": "s2", "y": 0,
+        }, key="review-test-key")
+        assert json.loads(body)["n_labels"] == 2
+
+        # Labels actually hit the store on disk, parseable by OnlineStore.
+        store = OnlineStore.load(tmp_path / "reviews.jsonl")
+        assert len(store.labels) == 2
+        assert store.labels[0].y == 1 and store.labels[0].family == "aimbot_legit"
+        assert store.labels[1].y == 0
+
+        # Refresh below the floor must refuse, not retrain on 2 rows.
+        status, body = _post_json(port, "/v1/reviews/refresh", {}, key="review-test-key")
+        assert status == 409
+        assert str(len(store.labels)) in body and str(MIN_LABELS_FOR_REFRESH) in body
+
+        # y outside {0,1} is rejected by validation before anything is written.
+        n_before = len(OnlineStore.load(tmp_path / "reviews.jsonl").labels)
+        status, _ = _post_json(port, "/v1/reviews", {
+            "player_id": "p3", "session_id": "s3", "y": 5,
+        }, key="review-test-key")
+        assert status == 422
+        assert len(OnlineStore.load(tmp_path / "reviews.jsonl").labels) == n_before
+    finally:
+        server.should_exit = True
+        time.sleep(0.2)
+
+
+

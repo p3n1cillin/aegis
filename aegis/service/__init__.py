@@ -63,6 +63,18 @@ class AttestVerifyRequest(BaseModel):
     probe_ok: dict[str, bool] = Field(default_factory=dict)
 
 
+class ReviewRequest(BaseModel):
+    """One human review verdict -- HANDOFF backlog item 5's queue input."""
+
+    player_id: str
+    session_id: str
+    y: int = Field(ge=0, le=1, description="0 = clean, 1 = cheat")
+    family: str = ""
+    reviewer: str = ""
+    notes: str = ""
+    p_fused: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
 def _resolve_source_path(raw: str, allowed_dir: str) -> Path:
     """Only honour a filesystem-path ``source`` if it resolves inside allowed_dir.
 
@@ -244,5 +256,60 @@ def create_app(
             "untrusted": st.untrusted,
             "confirmed_tamper": st.confirmed_tamper,
         }
+
+    @app.post("/v1/reviews", dependencies=[Depends(require_api_key)])
+    def submit_review(req: ReviewRequest) -> dict:
+        """Append one human review label to the online store (backlog item 5).
+
+        Append-only by design: labels are evidence, and refreshes are a
+        separate explicit action so a queue worker can never silently retrain
+        the serving model as a side effect of filing paperwork.
+        """
+        from ..train.online import OnlineStore, ReviewLabel
+
+        store = OnlineStore.load(cfg.review_store_path)
+        label = ReviewLabel(
+            player_id=req.player_id,
+            session_id=req.session_id,
+            y=int(req.y),
+            family=req.family,
+            p_fused=req.p_fused,
+            reviewer=req.reviewer,
+            notes=req.notes,
+        )
+        store.append(label)
+        log.info("review label appended player=%s y=%d (%d total)",
+                 req.player_id, req.y, len(store.labels))
+        return {"ok": True, "n_labels": len(store.labels)}
+
+    @app.post("/v1/reviews/refresh", dependencies=[Depends(require_api_key)])
+    def refresh_from_review_queue() -> dict:
+        """Operator-triggered online refresh from accumulated review labels.
+
+        Refuses below a minimum label count: refitting calibrators on a
+        handful of rows produces operating points worse than the synthetic
+        bootstrap they would replace. Returns the RefreshReport on success.
+        """
+        nonlocal ensemble
+        from ..train.online import MIN_LABELS_FOR_REFRESH, OnlineStore, refresh_from_reviews
+
+        if ensemble is None:
+            raise HTTPException(503, "no ensemble loaded")
+        store = OnlineStore.load(cfg.review_store_path)
+        if len(store.labels) < MIN_LABELS_FOR_REFRESH:
+            raise HTTPException(
+                409,
+                f"only {len(store.labels)} review labels; need >= "
+                f"{MIN_LABELS_FOR_REFRESH} before a refresh is meaningful",
+            )
+        new_ensemble, report = refresh_from_reviews(
+            ensemble, store, out_dir=cfg.model_dir, cfg=cfg,
+        )
+        # Serve the refreshed artefacts immediately; save() already ran
+        # inside refresh_from_reviews (and re-signed if AEGIS_MODEL_KEY set).
+        ensemble = new_ensemble
+        out = report.to_dict()
+        log.info("online refresh complete: %s", json.dumps(out)[:200])
+        return out
 
     return app
