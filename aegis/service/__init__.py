@@ -10,28 +10,33 @@ false until an operator flips ``policy.shadow_mode`` in config.
 
 from __future__ import annotations
 
+import logging
 import time
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
+from ..adapters.base import effective_capabilities
 from ..core.config import AegisConfig
-from ..core.registry import ADAPTERS, Capability
+from ..core.registry import ADAPTERS
 from ..features.pipeline import extract_engagement_tensors, extract_session_features
 from ..fusion.explain import explain_score
 from ..fusion.policy import Adjudicator
 from ..fusion.prior import trust_from_player_info
 from ..fusion.sprt import EvidenceState, SPRT
 from ..integrity.attest import Attestor
+from ..integrity.audit import AuditLog, make_audit_record
 from ..integrity.hid import HIDAnalyzer
 from ..models.calibrate import prob_to_llr
 from ..models.ensemble import CalibratedEnsemble
 
 # Import adapters for registration side effects.
 import aegis.adapters  # noqa: F401
+
+log = logging.getLogger("aegis.service")
 
 
 class AnalyzeRequest(BaseModel):
@@ -58,6 +63,20 @@ class AttestVerifyRequest(BaseModel):
     probe_ok: dict[str, bool] = Field(default_factory=dict)
 
 
+def _resolve_source_path(raw: str, allowed_dir: str) -> Path:
+    """Only honour a filesystem-path ``source`` if it resolves inside allowed_dir.
+
+    Without this, any caller who can reach ``/v1/analyze`` can pass an
+    arbitrary path and have the server read it back through the adapter
+    parse error / capture output -- an unauthenticated file-read primitive.
+    """
+    base = Path(allowed_dir).resolve()
+    candidate = (base / raw).resolve() if not Path(raw).is_absolute() else Path(raw).resolve()
+    if base != candidate and base not in candidate.parents:
+        raise HTTPException(400, "source path must resolve inside the configured capture directory")
+    return candidate
+
+
 def create_app(
     model_dir: str | Path = "models",
     config: AegisConfig | None = None,
@@ -69,6 +88,18 @@ def create_app(
     attestor = Attestor(cfg.integrity)
     hid = HIDAnalyzer()
     adjudicator = Adjudicator(policy=cfg.policy, sprt=SPRT(cfg.fusion))
+    # Every verdict (shadow included) lands here -- see integrity/audit.py.
+    audit = AuditLog(cfg.policy.audit_log_path) if cfg.policy.audit_log_path else None
+
+    if not cfg.api_key:
+        log.warning(
+            "AEGIS_API_KEY not set -- /v1/* routes are unauthenticated. Fine for "
+            "127.0.0.1-only dev use, not for anything reachable off-box."
+        )
+
+    def require_api_key(x_aegis_api_key: str = Header(default="")) -> None:
+        if cfg.api_key and x_aegis_api_key != cfg.api_key:
+            raise HTTPException(401, "missing or invalid X-Aegis-Api-Key")
 
     @app.on_event("startup")
     def _load() -> None:
@@ -86,7 +117,7 @@ def create_app(
             "spec_digest": ensemble.digest if ensemble else None,
         }
 
-    @app.post("/v1/analyze")
+    @app.post("/v1/analyze", dependencies=[Depends(require_api_key)])
     def analyze(req: AnalyzeRequest) -> dict:
         if ensemble is None:
             raise HTTPException(503, "model not loaded; run `aegis train` first")
@@ -95,16 +126,15 @@ def create_app(
         except KeyError as e:
             raise HTTPException(400, str(e)) from e
         adapter = adapter_cls() if isinstance(adapter_cls, type) else adapter_cls
+        source = req.source
+        if isinstance(source, str):
+            source = _resolve_source_path(source, cfg.allowed_source_dir)
         try:
-            session = adapter.parse(req.source)
+            session = adapter.parse(source)
         except Exception as e:
             raise HTTPException(400, f"adapter parse failed: {e}") from e
 
-        caps = set(adapter.capabilities)
-        if session.meta.get("no_vis") or not session.visibility:
-            caps.discard(Capability.VISIBILITY)
-        if not session.meta.get("attested", False):
-            caps.discard(Capability.HID_INPUT)
+        caps = effective_capabilities(adapter, session)
 
         feats = extract_session_features(session, caps, cfg=cfg.features, spec=ensemble.spec)
         tensors = extract_engagement_tensors(
@@ -151,8 +181,18 @@ def create_app(
                 st, score, prior,
                 integrity_confirmed_tamper=integ.confirmed_tamper,
                 n_engagements_lifetime=int(st.n_units) + score.meta.get("n_engagements", 0),
+                title=session.game,
             )
             expl = explain_score(score, features=f, tabular=ensemble.bundle.tabular, spec=ensemble.spec)
+            if audit is not None:
+                audit.append(make_audit_record(
+                    session_id=session.session_id,
+                    player_id=info.player_id,
+                    verdict=verd,
+                    score=score,
+                    shadow=cfg.policy.shadow_mode,
+                    model_digest=ensemble.digest,
+                ))
             hid_report = None
             if session.meta.get("attested") and info.player_id and session.inputs.get(f.slot):
                 hid_report = hid.analyze(session.inputs[f.slot]).__dict__
@@ -176,7 +216,7 @@ def create_app(
             "players": results,
         }
 
-    @app.post("/v1/attest/issue")
+    @app.post("/v1/attest/issue", dependencies=[Depends(require_api_key)])
     def attest_issue(req: AttestIssueRequest) -> dict:
         ch = attestor.issue(req.session_id, req.player_id)
         return {
@@ -186,7 +226,7 @@ def create_app(
             "probes": list(ch.probes),
         }
 
-    @app.post("/v1/attest/verify")
+    @app.post("/v1/attest/verify", dependencies=[Depends(require_api_key)])
     def attest_verify(req: AttestVerifyRequest) -> dict:
         res = attestor.verify(
             req.session_id,

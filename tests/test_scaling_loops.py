@@ -213,3 +213,137 @@ def test_network_jitter_changes_timestamps_but_not_ordering():
     )
     assert np.array_equal(clean.ticks["tick"], noisy.ticks["tick"])
     assert not np.allclose(clean.ticks["t"], noisy.ticks["t"])
+
+
+# ---------------------------------------------------------------------------
+# Loop 4 -- verdict audit log
+# ---------------------------------------------------------------------------
+
+
+def test_audit_log_roundtrip(tmp_path):
+    """Append/tail roundtrip including reasons list and unicode safety."""
+    from aegis.integrity.audit import AuditLog, AuditRecord
+
+    log = AuditLog(tmp_path / "nested" / "audit.jsonl")
+    rec = AuditRecord(
+        ts="2026-01-01T00:00:00.000+00:00",
+        session_id="s1", player_id="plåyer-1",
+        verdict="watch", shadow=True,
+        p_fused=0.61, conformal_p=0.4,
+        reasons=["posterior_ge_watch"], model_digest="abc", n_engagements=7,
+    )
+    log.append(rec)
+    log.append(AuditRecord(
+        ts="2026-01-01T00:00:01.000+00:00",
+        session_id="s1", player_id="p2",
+        verdict="clear", shadow=True,
+        p_fused=0.05, conformal_p=0.9,
+        reasons=[], model_digest="abc", n_engagements=3,
+    ))
+    got = log.tail(10)
+    assert len(got) == 2
+    assert got[0].player_id == "plåyer-1"  # unicode survives the JSONL line
+    assert got[-1].verdict == "clear"
+    assert got[0].reasons == ["posterior_ge_watch"]
+    assert log.tail(1)[0].player_id == "p2"
+    # Empty / missing log reads as empty.
+    assert AuditLog(tmp_path / "missing.jsonl").tail(5) == []
+
+
+def test_audit_log_records_shadow_verdicts(tmp_path):
+    """The live ingest scoring path must append one audit record per player
+    verdict, flagged shadow while shadow_mode is on (HANDOFF backlog item 8)."""
+    from aegis.adapters.cs2.capture import session_to_frames
+    from aegis.core.config import AegisConfig
+    from aegis.service.ingest import IngestHub
+    from aegis.integrity.audit import AuditLog
+
+    if not (MODEL_DIR / "ensemble.json").exists():
+        pytest.skip("models/ not trained yet")
+    audit_path = tmp_path / "audit.jsonl"
+    cfg = AegisConfig(model_dir=str(MODEL_DIR))
+    cfg.policy.audit_log_path = str(audit_path)
+    cfg.policy.shadow_mode = True
+
+    sess, _ = simulate_session(
+        session_id="t_audit",
+        cheat_families=["blatant", "clean", "clean", "clean"],
+        duration_s=12.0,
+        seed=31,
+    )
+    hub = IngestHub(model_dir=MODEL_DIR, capture_dir=tmp_path / "caps", config=cfg)
+    result = hub.ingest_frames(session_to_frames(sess))
+    n_players = len(result.players)
+    assert n_players >= 1
+
+    records = AuditLog(audit_path).tail(100)
+    assert len(records) == n_players
+    assert all(r.shadow for r in records), (
+        "shadow_mode is on; every audited verdict must be flagged shadow"
+    )
+    assert {r.verdict for r in records} <= {
+        "clear", "watch", "review", "ban", "integrity_ban"
+    }
+    assert any(r.p_fused > 0.5 for r in records), (
+        "the blatant cheater should have scored above prior in this lobby"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Loop 5 -- per-title conformal gates
+# ---------------------------------------------------------------------------
+
+
+def _ban_capable_fixture():
+    """State/score/policy combo that reaches the ban branch when conformal
+    admits: huge SPRT evidence, plenty of engagements, p_fused ~1."""
+    from aegis.core.config import FusionConfig, PolicyConfig
+    from aegis.fusion.policy import Adjudicator
+    from aegis.fusion.prior import TrustPrior
+    from aegis.fusion.sprt import EvidenceState, SPRT
+    from aegis.models.ensemble import Score
+
+    fusion = FusionConfig(alpha=1e-3)  # relaxed global gate for the test
+    policy = PolicyConfig(shadow_mode=True, min_engagements_for_ban=10)
+    adj = Adjudicator(policy=policy, sprt=SPRT(fusion))
+    st = EvidenceState(player_id="p", log_odds=20.0, n_units=200.0)
+    score = Score(
+        player_id="p", session_id="s", slot=0,
+        p_tabular=0.999, p_temporal=0.999, p_novelty=0.9,
+        p_fused=0.999, llr_session=10.0,
+        conformal_p=1e-4,  # admits under 1e-3, refuses under 1e-5
+        meta={"n_engagements": 80},
+    )
+    prior = TrustPrior(p=0.05, reason="test")
+    return adj, st, score, prior
+
+
+def test_per_title_alpha_gate():
+    """A title-specific alpha must change the conformal admission decision
+    only for that title; other titles and the default path are untouched."""
+    adj, st, score, prior = _ban_capable_fixture()
+    adj.sprt.cfg.per_title_alpha = {"tarkov": 1e-5}
+
+    # Untitled / unconfigured title -> relaxed global alpha admits the ban.
+    assert adj.decide(st, score, prior).band.value == "ban"
+    assert adj.decide(st, score, prior, title="cs2").band.value == "ban"
+    # Configured title -> stricter gate refuses the auto-ban.
+    v = adj.decide(st, score, prior, title="tarkov")
+    assert v.band.value == "review"
+    assert any("per-title" in r or "refusing auto-ban" in r for r in v.reasons)
+    # Alpha resolution itself is deterministic and falls back correctly.
+    assert adj.alpha_for("tarkov") == 1e-5
+    assert adj.alpha_for("cs2") == adj.sprt.cfg.alpha
+    assert adj.alpha_for(None) == adj.sprt.cfg.alpha
+
+
+def test_per_title_alpha_never_relaxes_below_global():
+    """An operator typo (title alpha *looser* than intended system budget)
+    is still honoured explicitly -- but the resolved value must always be
+    visible in the reason string so audits catch it."""
+    adj, st, score, prior = _ban_capable_fixture()
+    adj.sprt.cfg.per_title_alpha = {"tarkov": 1e-2}
+    v = adj.decide(st, score, prior, title="tarkov")
+    assert v.band.value == "ban"
+    assert any("conformal_p" in r for r in v.reasons)
+

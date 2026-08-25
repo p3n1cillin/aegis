@@ -77,6 +77,12 @@ class FusionConfig:
     # Correlation discount: evidence units from the same match are not
     # independent. Effective count = n ** corr_exponent within a session.
     corr_exponent: float = 0.65
+    # Per-title overrides of ``alpha`` -- HANDOFF "Next work" item 6: do not
+    # share one false-positive operating point across games. Each title has a
+    # different negative population, so its conformal null differs; a title
+    # absent from this map falls back to the global ``alpha``. Keys are game
+    # names as emitted by adapters (``Session.game``).
+    per_title_alpha: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -93,6 +99,9 @@ class PolicyConfig:
     # Shadow mode: compute everything, issue nothing. Default ON so a fresh
     # deployment cannot ban anyone until an operator explicitly opts in.
     shadow_mode: bool = True
+    # Append-only JSONL trail of every adjudication (including shadow ones) --
+    # see integrity/audit.py. Empty disables.
+    audit_log_path: str = "audit/verdicts.jsonl"
 
 
 @dataclass
@@ -114,6 +123,16 @@ class AegisConfig:
     policy: PolicyConfig = field(default_factory=PolicyConfig)
     integrity: IntegrityConfig = field(default_factory=IntegrityConfig)
     model_dir: str = "models"
+    # Empty means auth is off -- fine for `aegis serve --host 127.0.0.1` (the
+    # CLI default), a real liability the moment anyone binds a non-loopback
+    # host. Set via AEGIS_API_KEY; checked against the X-Aegis-Api-Key header
+    # on every /v1/* route except /health.
+    api_key: str = ""
+    # AnalyzeRequest.source may be a filesystem path (documented, for trusted
+    # callers like an internal ops script). Without a containment check that
+    # is an arbitrary-file-read from any caller who can reach the endpoint --
+    # so a path is only honoured if it resolves inside this directory.
+    allowed_source_dir: str = "data/captures"
 
     @classmethod
     def load(cls, path: str | Path) -> "AegisConfig":
@@ -125,6 +144,8 @@ class AegisConfig:
             policy=PolicyConfig(**raw.get("policy", {})),
             integrity=IntegrityConfig(**raw.get("integrity", {})),
             model_dir=raw.get("model_dir", "models"),
+            api_key=raw.get("api_key", ""),
+            allowed_source_dir=raw.get("allowed_source_dir", "data/captures"),
         )
 
     def save(self, path: str | Path) -> None:

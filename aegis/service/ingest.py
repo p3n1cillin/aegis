@@ -20,15 +20,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
+from ..adapters.base import effective_capabilities
 from ..adapters.cs2.adapter import CS2Adapter
 from ..adapters.cs2.capture import decode_frames_from_buffer, encode_frame, write_capture
 from ..core.config import AegisConfig
-from ..core.registry import Capability
 from ..core.types import Session
 from ..features.pipeline import extract_engagement_tensors, extract_session_features
 from ..fusion.policy import Adjudicator
 from ..fusion.prior import trust_from_player_info
 from ..fusion.sprt import EvidenceState, SPRT
+from ..integrity.audit import AuditLog, make_audit_record
 from ..models.calibrate import prob_to_llr
 from ..models.ensemble import CalibratedEnsemble
 
@@ -80,6 +81,10 @@ class IngestHub:
             self.ensemble = CalibratedEnsemble.load(model_dir, device=self.cfg.model.device)
         self.states: dict[str, EvidenceState] = {}
         self.adjudicator = Adjudicator(policy=self.cfg.policy, sprt=SPRT(self.cfg.fusion))
+        self.audit = (
+            AuditLog(self.cfg.policy.audit_log_path)
+            if self.cfg.policy.audit_log_path else None
+        )
 
     def ingest_frames(
         self,
@@ -118,14 +123,7 @@ class IngestHub:
 
     def _score_session(self, session: Session) -> list[dict]:
         assert self.ensemble is not None
-        caps = set(self.adapter.capabilities)
-        if session.meta.get("no_vis") or not session.visibility:
-            caps.discard(Capability.VISIBILITY)
-        if not session.meta.get("attested", False):
-            caps.discard(Capability.HID_INPUT)
-        # Seq gaps: drop HID and treat visibility as untrusted for the window.
-        if session.meta.get("partial"):
-            caps.discard(Capability.HID_INPUT)
+        caps = effective_capabilities(self.adapter, session)
 
         feats = extract_session_features(
             session, caps, cfg=self.cfg.features, spec=self.ensemble.spec
@@ -166,6 +164,7 @@ class IngestHub:
             verd = self.adjudicator.decide(
                 st, score, prior,
                 n_engagements_lifetime=int(st.n_units) + score.meta.get("n_engagements", 0),
+                title=session.game,
             )
             out.append({
                 "player_id": info.player_id,
@@ -178,6 +177,15 @@ class IngestHub:
                     "posterior": st.posterior(prior.p),
                 },
             })
+            if self.audit is not None:
+                self.audit.append(make_audit_record(
+                    session_id=session.session_id,
+                    player_id=info.player_id,
+                    verdict=verd,
+                    score=score,
+                    shadow=self.cfg.policy.shadow_mode,
+                    model_digest=self.ensemble.digest,
+                ))
         return out
 
 

@@ -9,6 +9,7 @@ Commands:
   aegis ingest         live plugin TCP ingest (captures + score)
   aegis explain        print an explanation for a scored synthetic lobby
   aegis online-refresh fold human review labels into calibrators / novelty
+  aegis audit           read the verdict audit log (JSONL)
 """
 
 from __future__ import annotations
@@ -65,6 +66,11 @@ def main(argv: list[str] | None = None) -> int:
     p_on.add_argument("--model-dir", type=str, default="models")
     p_on.add_argument("--labels", type=str, required=True, help="JSONL review label store")
     p_on.add_argument("--out", type=str, default=None, help="defaults to --model-dir")
+
+    p_audit = sub.add_parser("audit", help="read the verdict audit log")
+    p_audit.add_argument("--log", type=str, default="audit/verdicts.jsonl")
+    p_audit.add_argument("--tail", type=int, default=20)
+    p_audit.add_argument("--json", action="store_true", help="emit raw JSON lines")
 
     args = parser.parse_args(argv)
 
@@ -144,10 +150,23 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd == "serve":
+        import os
+
         import uvicorn
+
+        from .core.config import AegisConfig
         from .service import create_app
 
-        app = create_app(model_dir=args.model_dir)
+        cfg = AegisConfig(model_dir=args.model_dir)
+        cfg.api_key = os.environ.get("AEGIS_API_KEY", "")
+        if args.host not in ("127.0.0.1", "localhost", "::1") and not cfg.api_key:
+            print(
+                f"[aegis] WARNING: serving on {args.host} (not loopback) with no "
+                "AEGIS_API_KEY set -- /v1/* routes are reachable by anyone who can "
+                "route to this host.",
+                file=sys.stderr,
+            )
+        app = create_app(model_dir=args.model_dir, config=cfg)
         uvicorn.run(app, host=args.host, port=args.port)
         return 0
 
@@ -199,6 +218,24 @@ def main(argv: list[str] | None = None) -> int:
             ens, store, out_dir=args.out or args.model_dir,
         )
         print(json.dumps(report.to_dict(), indent=2))
+        return 0
+
+    if args.cmd == "audit":
+        from .integrity.audit import AuditLog
+
+        records = AuditLog(args.log).tail(args.tail)
+        if not records:
+            print(f"[aegis] no audit records in {args.log}")
+            return 0
+        for r in records:
+            if args.json:
+                print(r.to_json())
+            else:
+                print(
+                    f"{r.ts}  {r.verdict:<14} shadow={str(r.shadow):<5} "
+                    f"p={r.p_fused:.3f} conf_p={r.conformal_p:.2e} "
+                    f"eng={r.n_engagements:<4d} {r.player_id} ({r.session_id})"
+                )
         return 0
 
     return 1

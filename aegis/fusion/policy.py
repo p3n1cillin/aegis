@@ -62,6 +62,18 @@ class Adjudicator:
     policy: PolicyConfig = field(default_factory=PolicyConfig)
     sprt: SPRT = field(default_factory=SPRT)
 
+    def alpha_for(self, title: str | None) -> float:
+        """Effective conformal alpha for a title (per-title override else global).
+
+        Per-title gates exist because each game's clean population is
+        different -- sharing one operating point across titles silently
+        re-targets the system-wide false-positive budget (HANDOFF item 6).
+        """
+        overrides = getattr(self.sprt.cfg, "per_title_alpha", None) or {}
+        if title and title in overrides:
+            return float(overrides[title])
+        return float(self.sprt.cfg.alpha)
+
     def decide(
         self,
         state: EvidenceState,
@@ -70,10 +82,12 @@ class Adjudicator:
         *,
         integrity_confirmed_tamper: bool = False,
         n_engagements_lifetime: int | None = None,
+        title: str | None = None,
     ) -> Verdict:
         reasons: list[str] = []
         posterior = state.posterior(prior.p)
         n_eng = n_engagements_lifetime if n_engagements_lifetime is not None else score.meta.get("n_engagements", 0)
+        alpha_eff = self.alpha_for(title)
 
         if integrity_confirmed_tamper and self.policy.integrity_ban_on_confirmed:
             band = VerdictBand.INTEGRITY_BAN
@@ -94,11 +108,16 @@ class Adjudicator:
                     f"posterior={posterior:.4f} crosses ban but only {n_eng} engagements "
                     f"(need {self.policy.min_engagements_for_ban})"
                 )
-            elif score.conformal_p >= self.sprt.cfg.alpha:
+            elif score.conformal_p >= alpha_eff:
                 band = VerdictBand.REVIEW
+                reason_src = (
+                    f"per-title alpha={alpha_eff:.2e} [{title}]"
+                    if title and title in (getattr(self.sprt.cfg, "per_title_alpha", None) or {})
+                    else f"alpha={alpha_eff:.2e}"
+                )
                 reasons.append(
                     f"posterior={posterior:.4f} but conformal_p={score.conformal_p:.2e} "
-                    f">= alpha={self.sprt.cfg.alpha:.2e}; refusing auto-ban"
+                    f">= {reason_src}; refusing auto-ban"
                 )
             else:
                 band = VerdictBand.BAN
