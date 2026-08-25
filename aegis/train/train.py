@@ -40,11 +40,18 @@ def train_ensemble(
     out_dir = Path(out_dir or cfg.model_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    train, cal, test = split_by_player(ds, seed=cfg.model.seed)
+    # Larger datasets can afford a bigger calibration share: the isotonic
+    # fitters are the ECE bottleneck (measured: refitting the tabular
+    # calibrator on ~2x more rows cut held-out ECE roughly 4x, while switching
+    # to Platt scaling was strictly worse -- see HANDOFF entry 48). Keep the
+    # small-dataset default so tiny runs still leave enough training rows.
+    cal_frac = 0.22 if len(ds.y) >= 600 else 0.15
+    train, cal, test = split_by_player(ds, seed=cfg.model.seed, cal_frac=cal_frac)
     report: dict = {
         "n_train": int(train.y.size), "n_cal": int(cal.y.size), "n_test": int(test.y.size),
         "n_train_eng": int(train.eng_y.size), "cheat_rate_train": float(train.y.mean()) if train.y.size else 0.0,
         "tabular_params": tabular_params or {},
+        "cal_frac": cal_frac,
     }
 
     # ---- tabular --------------------------------------------------------
