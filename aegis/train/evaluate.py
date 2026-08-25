@@ -11,7 +11,8 @@ Everything else is diagnostic.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+import time
+from dataclasses import asdict, dataclass, field, replace
 
 import numpy as np
 from sklearn.metrics import (
@@ -255,3 +256,138 @@ def detection_vs_stealth(
                     "recall_at_review": float(np.mean(np.array(ps) >= 0.90)),
                 })
     return rows
+
+
+def multi_session_accumulation(
+    ensemble: CalibratedEnsemble,
+    *,
+    cfg: AegisConfig | None = None,
+    cheat_family: str = "wallhack",
+    n_cheat_identities: int = 15,
+    n_clean_identities: int = 15,
+    n_sessions: int = 20,
+    duration_s: float = 60.0,
+    seed: int = 7,
+) -> dict:
+    """Evidence accumulation across *matches*, not one score per match.
+
+    ``evaluate_ensemble``'s single-session numbers understate the system by
+    design -- SPRT exists because one match should not decide a verdict. This
+    replays each of several persistent identities across ``n_sessions``
+    separate matches (one simulated day apart, well inside the 45-day evidence
+    half-life) through the same ``EvidenceState``/SPRT path the live service
+    uses, and reports how many matches it actually takes to flag/ban a
+    persistent cheater, and — the number that actually matters for a
+    real deployment — the false-flag rate among clean identities over the
+    same number of matches. ``cheat_family`` defaults to "wallhack" because
+    that is Aegis's own named differentiator against VACnet's blind spot
+    (README's failure-mode table); a single low single-session recall number
+    for it is not evidence the claim fails, since the claim was never "one
+    match is enough."
+    """
+    from ..features.pipeline import extract_engagement_tensors, extract_session_features
+    from .dataset import SIM_CAPS
+    from .simulate import simulate_session
+
+    cfg = cfg or AegisConfig()
+    caps = set(SIM_CAPS)
+    prior = TrustPrior(p=ensemble.bundle.prior, reason="multi_session_eval")
+    sprt = SPRT(cfg.fusion)
+    # Real decide() gates on posterior>=ban_threshold AND crossed_ban AND
+    # lifetime engagements>=min_engagements_for_ban AND conformal admission --
+    # strictly more conservative than sprt.crossed_ban() alone. shadow_mode is
+    # forced off here so `issued` reflects what decide() actually decided, not
+    # the deployment default; this function measures the policy, it does not
+    # enact it.
+    adjudicator = Adjudicator(policy=replace(cfg.policy, shadow_mode=False), sprt=sprt)
+    rng = np.random.default_rng(seed)
+
+    def run_identity(tag: str, family: str) -> dict:
+        st = EvidenceState(player_id=tag)
+        sessions_to_flag: int | None = None
+        sessions_to_ban: int | None = None
+        sessions_to_policy_review: int | None = None
+        sessions_to_policy_ban: int | None = None
+        conformal_ever_blocked = False
+        lifetime_engagements = 0
+        t0 = time.time()
+        for m in range(n_sessions):
+            sess, _ = simulate_session(
+                session_id=f"{tag}_m{m}", cheat_families=[family, "clean", "clean", "clean"],
+                duration_s=duration_s, seed=int(rng.integers(0, 2**31 - 1)),
+            )
+            feats = extract_session_features(sess, caps, spec=ensemble.spec)
+            f0 = next(f for f in feats if f.slot == 0)
+            tensors = extract_engagement_tensors(sess, caps, cfg=cfg.features, seq_len=cfg.model.seq_len)
+            eng0 = [tt for tt in tensors if tt.slot == 0]
+            seqs = np.stack([tt.data for tt in eng0]) if eng0 else None
+            scals = np.stack([tt.scalars for tt in eng0]) if eng0 else None
+            score = ensemble.score_player(
+                session_id=sess.session_id, slot=0, player_id=tag,
+                features=f0.values, engagement_seqs=seqs, engagement_scalars=scals,
+            )
+            lifetime_engagements += len(eng0)
+            nov_llr = float(prob_to_llr(np.array([score.p_novelty]), prior=prior.p)[0]) * 0.4
+            t = t0 + m * 86400.0  # one match per simulated day
+            sprt.observe_session(
+                st, session_id=sess.session_id, session_llr=score.llr_session,
+                engagement_llrs=score.engagement_llrs, novelty_llr=nov_llr, t=t,
+            )
+            if sessions_to_flag is None and sprt.crossed_flag(st):
+                sessions_to_flag = m + 1
+            if sessions_to_ban is None and sprt.crossed_ban(st):
+                sessions_to_ban = m + 1
+                if score.conformal_p >= sprt.cfg.alpha:
+                    conformal_ever_blocked = True
+
+            verd = adjudicator.decide(
+                st, score, prior, n_engagements_lifetime=lifetime_engagements,
+            )
+            if sessions_to_policy_review is None and verd.band.value == "review":
+                sessions_to_policy_review = m + 1
+            if sessions_to_policy_ban is None and verd.band.value == "ban":
+                sessions_to_policy_ban = m + 1
+        return {
+            "sessions_to_flag": sessions_to_flag,
+            "sessions_to_ban": sessions_to_ban,
+            "sessions_to_policy_review": sessions_to_policy_review,
+            "sessions_to_policy_ban": sessions_to_policy_ban,
+            "conformal_ever_blocked_a_raw_ban": conformal_ever_blocked,
+            "final_posterior": st.posterior(prior.p),
+            "final_n_units": st.n_units,
+            "lifetime_engagements": lifetime_engagements,
+        }
+
+    cheat_results = [run_identity(f"cheat_{i}", cheat_family) for i in range(n_cheat_identities)]
+    clean_results = [run_identity(f"clean_{i}", "clean") for i in range(n_clean_identities)]
+
+    def rate(results: list[dict], key: str) -> float:
+        return sum(1 for r in results if r[key] is not None) / max(len(results), 1)
+
+    def median_of(results: list[dict], key: str) -> float | None:
+        vals = [r[key] for r in results if r[key] is not None]
+        return float(np.median(vals)) if vals else None
+
+    return {
+        "cheat_family": cheat_family,
+        "n_sessions": n_sessions,
+        "n_cheat_identities": n_cheat_identities,
+        "n_clean_identities": n_clean_identities,
+        # Raw SPRT boundary crossing -- ignores conformal + min_engagements_for_ban.
+        "cheat_flag_rate": rate(cheat_results, "sessions_to_flag"),
+        "cheat_ban_rate_raw_sprt": rate(cheat_results, "sessions_to_ban"),
+        "clean_false_flag_rate": rate(clean_results, "sessions_to_flag"),
+        "clean_false_ban_rate_raw_sprt": rate(clean_results, "sessions_to_ban"),
+        # Full production Adjudicator.decide() path -- what would actually happen.
+        "cheat_policy_review_rate": rate(cheat_results, "sessions_to_policy_review"),
+        "cheat_policy_ban_rate": rate(cheat_results, "sessions_to_policy_ban"),
+        "clean_false_policy_review_rate": rate(clean_results, "sessions_to_policy_review"),
+        "clean_false_policy_ban_rate": rate(clean_results, "sessions_to_policy_ban"),
+        "conformal_ever_blocked_a_raw_ban_cheat": sum(r["conformal_ever_blocked_a_raw_ban"] for r in cheat_results),
+        "conformal_ever_blocked_a_raw_ban_clean": sum(r["conformal_ever_blocked_a_raw_ban"] for r in clean_results),
+        "median_sessions_to_flag": median_of(cheat_results, "sessions_to_flag"),
+        "median_sessions_to_ban_raw_sprt": median_of(cheat_results, "sessions_to_ban"),
+        "median_sessions_to_policy_ban": median_of(cheat_results, "sessions_to_policy_ban"),
+        "cheat_final_posteriors": [r["final_posterior"] for r in cheat_results],
+        "clean_final_posteriors": [r["final_posterior"] for r in clean_results],
+    }

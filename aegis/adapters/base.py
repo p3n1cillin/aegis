@@ -81,6 +81,47 @@ class AdapterValidationError(ValueError):
     pass
 
 
+_HIGH_RATE_MIN_HZ = 60.0  # matches the >= 64 Hz contract in Capability docs, minus jitter slack
+
+
+def _has_high_rate_view(session: Session) -> bool:
+    """Measure the actual view-sample density instead of trusting metadata."""
+    ts = np.unique(session.ticks["t"]) if session.ticks.size else np.empty(0)
+    if ts.size < 2:
+        return False
+    dt = np.median(np.diff(ts))
+    return dt > 0 and (1.0 / dt) >= _HIGH_RATE_MIN_HZ
+
+
+def effective_capabilities(adapter: GameAdapter, session: Session) -> set[Capability]:
+    """Capabilities actually usable for this session, not the adapter's default.
+
+    A capture-time gap (no TraceShape on this map, an unattested client, a
+    seq-gap window) makes a capability unusable for one session without the
+    adapter losing it for every session. Callers that skip this and check
+    ``adapter.capabilities`` directly will run extractors against a channel
+    that is honestly empty for this session -- see the module docstring's
+    rule 5. Kept identical to the narrowing in ``service/__init__.py`` and
+    ``service/ingest.py`` on purpose; change all three together.
+    """
+    caps = set(adapter.capabilities)
+    if session.meta.get("no_vis") or not session.visibility:
+        caps.discard(Capability.VISIBILITY)
+    if not session.meta.get("attested", False):
+        caps.discard(Capability.HID_INPUT)
+    if Capability.HIGH_RATE_VIEW in caps and not _has_high_rate_view(session):
+        # A title (or a build of one) can declare 64 Hz and actually ship
+        # less -- CS2's plugin throttled to 16 Hz for a long time and every
+        # session still claimed HIGH_RATE_VIEW. Measure the real sample
+        # density rather than trust the declared rate, or the spectral
+        # tremor channel silently degrades to noise on real matches while
+        # looking fine on full-rate synthetic data.
+        caps.discard(Capability.HIGH_RATE_VIEW)
+    if session.meta.get("partial"):
+        caps.discard(Capability.HID_INPUT)
+    return caps
+
+
 def validate_session(session: Session, adapter: GameAdapter, strict: bool = True) -> list[str]:
     """Check adapter output against the schema contract.
 
@@ -116,9 +157,10 @@ def validate_session(session: Session, adapter: GameAdapter, strict: bool = True
         if k.attacker not in known or k.victim not in known:
             problems.append(f"kill references unknown slot {k.attacker}->{k.victim}")
             break
-    if Capability.VISIBILITY in adapter.capabilities and not session.visibility:
+    caps = effective_capabilities(adapter, session)
+    if Capability.VISIBILITY in caps and not session.visibility:
         problems.append("adapter claims VISIBILITY but emitted no visibility events")
-    if Capability.RECOIL_STATE in adapter.capabilities and session.shots:
+    if Capability.RECOIL_STATE in caps and session.shots:
         if all(s.recoil_pitch == 0.0 and s.recoil_yaw == 0.0 for s in session.shots):
             problems.append("adapter claims RECOIL_STATE but all recoil is zero")
 

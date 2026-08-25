@@ -1,0 +1,482 @@
+{
+  "cheater": [
+    {
+      "file": "kyousuke-round2-kill3_kill_11021_to_11321.csv",
+      "p_fused": 0.29280125884354136,
+      "p_tabular": 0.999999,
+      "p_temporal": 0.5,
+      "p_novelty": 9.27497032761767e-07,
+      "n_engagements": 0,
+      "caps": [
+        "high_rate_view",
+        "positions",
+        "shots",
+        "view_angles"
+      ]
+    },
+    {
+      "file": "kyousuke-round2-kill3_kill_16221_to_16521.csv",
+      "p_fused": 0.29280125884354136,
+      "p_tabular": 0.999999,
+      "p_temporal": 0.5,
+      "p_novelty": 1.792698292436654e-07,
+      "n_engagements": 0,
+      "caps": [
+        "high_rate_view",
+        "positions",
+        "shots",
+        "view_angles"
+      ]
+    },
+    {
+      "file": "kyousuke-round2-kill3_kill_19325_to_19625.csv",
+      "p_fused": 0.29315881090640317,
+      "p_tabular": 0.999999,
+      "p_temporal": 0.5,
+      "p_novelty": 1.582587010035221e-06,
+      "n_engagements": 0,
+      "caps": [
+        "high_rate_view",
+        "positions",
+        "shots",
+        "view_angles"
+      ]
+    },
+    {
+      "file": "kyousuke-round2-kill3_kill_19435_to_19735.csv",
+      "p_fused": 0.20580007867772135,
+      "p_tabular": 0.999999,
+      "p_temporal": 0.5,
+      "p_novelty": 1.3926403609717823e-07,
+      "n_engagements": 0,
+      "caps": [
+        "high_rate_view",
+        "positions",
+        "shots",
+        "view_angles"
+      ]
+    },
+    {
+      "file": "kyousuke-round2-kill3_kill_19654_to_19954.csv",
+      "p_fused": 0.20580007867772135,
+      "p_tabular": 0.999999,
+      "p_temporal": 0.5,
+      "p_novelty": 1.3926403609717823e-07,
+      "n_engagements": 0,
+      "caps": [
+        "high_rate_view",
+        "positions",
+        "shots",
+        "view_angles"
+      ]
+    },
+    {
+      "file": "kyousuke-round2-kill3_kill_23547_to_23847.csv",
+      "p_fused": 0.20580007867772135,
+      "p_tabular": 0.999999,
+      "p_temporal": 0.5,
+      "p_novelty": 1.3926403609717823e-07,
+      "n_engagements": 0,
+      "caps": [
+        "high_rate_view",
+        "positions",
+        "shots",
+        "view_angles"
+      ]
+    },
+    {
+      "file": "kyousuke-round2-kill3_kill_43550_to_43850.csv",
+      "p_fused": 0.2931387472772032,
+      "p_tabular": 0.999999,
+      "p_temporal": 0.5,
+      "p_novelty": 1.5407307446469816e-06,
+      "n_engagements": 0,
+      "caps": [
+        "high_rate_view",
+        "positions",
+        "shots",
+        "view_angles"
+      ]
+    },
+    {
+      "file": "kyousuke-round2-kill3_kill_47006_to_47306.csv",
+      "p_fused": 0.29280125884354136,
+      "p_tabular": 0.999999,
+      "p_temporal": 0.5,
+      "p_novelty": 2.1509000341151535e-07,
+      "n_engagements": 0,
+      "caps": [
+        "high_rate_view",
+        "positions",
+        "shots",
+        "view_angles"
+      ]
+    },
+    {
+      "file": "kyousuke-round2-kill3_kill_5426_to_5726.csv",
+      "p_fused": 0.20580007867772135,
+      "p_tabular": 0.999999,
+      "p_temporal": 0.5,
+      "p_novelty": 1.3926403609717823e-07,
+      "n_engagements": 0,
+      "caps": [
+        "high_rate_view",
+        "positions",
+        "shots",
+        "view_angles"
+      ]
+    },
+    {
+      "file": "kyousuke-round2-kill3_kill_5582_to_5882.csv",
+      "p_fused": 0.29280125884354136,
+      "p_tabular": 0.999999,
+      "p_temporal": 0.5,
+      "p_novelty": 1.5031778647087515e-07,
+      "n_engagements": 0,
+      "caps": [
+        "high_rate_view",
+        "positions",
+        "shots",
+        "view_angles"
+      ]
+    },
+    {
+      "file": "kyousuke-round2-kill3_kill_6041_to_6341.csv",
+      "p_fused": 0.20580007867772135,
+      "p_tabular": 0.999999,
+      "p_temporal": 0.5,
+      "p_novelty": 1.3926403609717823e-07,
+      "n_engagements": 0,
+      "caps": [
+        "high_rate_view",
+        "positions",
+        "shots",
+        "view_angles"
+      ]
+    },
+    {
+      "file": "kyousuke-round2-kill3_kill_6519_to_6819.csv",
+      "p_fused": 0.2940397240089365,
+      "p_tabular": 0.999999,
+      "p_temporal": 0.5,
+      "p_novelty": 5.983243823010756e-06,
+      "n_engagements": 0,
+      "caps": [
+        "high_rate_view",
+        "positions",
+        "shots",
+        "view_angles"
+      ]
+    },
+    {
+      "file": "sample1.csv",
+      "p_fused": 0.29280125884354136,
+      "p_tabular": 0.999999,
+      "p_temporal": 0.5,
+      "p_novelty": 9.27497032761767e-07,
+      "n_engagements": 0,
+      "caps": [
+        "high_rate_view",
+        "positions",
+        "shots",
+        "view_angles"
+      ]
+    }
+  ],
+  "legit": [
+    {
+      "file": "ava-legit-firstkill_kill_11203_to_11503.csv",
+      "p_fused": 0.20580007867772135,
+      "p_tabular": 0.999999,
+      "p_temporal": 0.5,
+      "p_novelty": 1.3926403609717823e-07,
+      "n_engagements": 0,
+      "caps": [
+        "high_rate_view",
+        "positions",
+        "shots",
+        "view_angles"
+      ]
+    },
+    {
+      "file": "ava-legit-firstkill_kill_11966_to_12266.csv",
+      "p_fused": 0.29280125884354136,
+      "p_tabular": 0.999999,
+      "p_temporal": 0.5,
+      "p_novelty": 1.7768365480155957e-07,
+      "n_engagements": 0,
+      "caps": [
+        "high_rate_view",
+        "positions",
+        "shots",
+        "view_angles"
+      ]
+    },
+    {
+      "file": "ava-legit-firstkill_kill_12535_to_12835.csv",
+      "p_fused": 0.29280125884354136,
+      "p_tabular": 0.999999,
+      "p_temporal": 0.5,
+      "p_novelty": 1.8531792004755192e-07,
+      "n_engagements": 0,
+      "caps": [
+        "high_rate_view",
+        "positions",
+        "shots",
+        "view_angles"
+      ]
+    },
+    {
+      "file": "ava-legit-firstkill_kill_126852_to_127152.csv",
+      "p_fused": 0.20580007867772135,
+      "p_tabular": 0.999999,
+      "p_temporal": 0.5,
+      "p_novelty": 1.3926403609717823e-07,
+      "n_engagements": 0,
+      "caps": [
+        "high_rate_view",
+        "positions",
+        "shots",
+        "view_angles"
+      ]
+    },
+    {
+      "file": "ava-legit-firstkill_kill_135168_to_135468.csv",
+      "p_fused": 0.20580007867772135,
+      "p_tabular": 0.999999,
+      "p_temporal": 0.5,
+      "p_novelty": 1.3926403609717823e-07,
+      "n_engagements": 0,
+      "caps": [
+        "high_rate_view",
+        "positions",
+        "shots",
+        "view_angles"
+      ]
+    },
+    {
+      "file": "ava-legit-firstkill_kill_137062_to_137362.csv",
+      "p_fused": 0.29280125884354136,
+      "p_tabular": 0.999999,
+      "p_temporal": 0.5,
+      "p_novelty": 1.7032228518178032e-07,
+      "n_engagements": 0,
+      "caps": [
+        "high_rate_view",
+        "positions",
+        "shots",
+        "view_angles"
+      ]
+    },
+    {
+      "file": "ava-legit-firstkill_kill_149963_to_150263.csv",
+      "p_fused": 0.29280125884354136,
+      "p_tabular": 0.999999,
+      "p_temporal": 0.5,
+      "p_novelty": 6.492457431024447e-07,
+      "n_engagements": 0,
+      "caps": [
+        "high_rate_view",
+        "positions",
+        "shots",
+        "view_angles"
+      ]
+    },
+    {
+      "file": "ava-legit-firstkill_kill_19428_to_19728.csv",
+      "p_fused": 0.20580007867772135,
+      "p_tabular": 0.999999,
+      "p_temporal": 0.5,
+      "p_novelty": 1.3926403609717823e-07,
+      "n_engagements": 0,
+      "caps": [
+        "high_rate_view",
+        "positions",
+        "shots",
+        "view_angles"
+      ]
+    },
+    {
+      "file": "ava-legit-firstkill_kill_26419_to_26719.csv",
+      "p_fused": 0.20580007867772135,
+      "p_tabular": 0.999999,
+      "p_temporal": 0.5,
+      "p_novelty": 1.3926403609717823e-07,
+      "n_engagements": 0,
+      "caps": [
+        "high_rate_view",
+        "positions",
+        "shots",
+        "view_angles"
+      ]
+    },
+    {
+      "file": "ava-legit-firstkill_kill_27044_to_27344.csv",
+      "p_fused": 0.20580007867772135,
+      "p_tabular": 0.999999,
+      "p_temporal": 0.5,
+      "p_novelty": 1.3926403609717823e-07,
+      "n_engagements": 0,
+      "caps": [
+        "high_rate_view",
+        "positions",
+        "shots",
+        "view_angles"
+      ]
+    },
+    {
+      "file": "ava-legit-firstkill_kill_27788_to_28088.csv",
+      "p_fused": 0.29280125884354136,
+      "p_tabular": 0.999999,
+      "p_temporal": 0.5,
+      "p_novelty": 2.166786280063288e-07,
+      "n_engagements": 0,
+      "caps": [
+        "high_rate_view",
+        "positions",
+        "shots",
+        "view_angles"
+      ]
+    },
+    {
+      "file": "ava-legit-firstkill_kill_45088_to_45388.csv",
+      "p_fused": 0.20580007867772135,
+      "p_tabular": 0.999999,
+      "p_temporal": 0.5,
+      "p_novelty": 1.3926403609717823e-07,
+      "n_engagements": 0,
+      "caps": [
+        "high_rate_view",
+        "positions",
+        "shots",
+        "view_angles"
+      ]
+    },
+    {
+      "file": "ava-legit-firstkill_kill_62942_to_63242.csv",
+      "p_fused": 0.29280125884354136,
+      "p_tabular": 0.999999,
+      "p_temporal": 0.5,
+      "p_novelty": 1.5204116762232083e-07,
+      "n_engagements": 0,
+      "caps": [
+        "high_rate_view",
+        "positions",
+        "shots",
+        "view_angles"
+      ]
+    },
+    {
+      "file": "ava-legit-firstkill_kill_6325_to_6625.csv",
+      "p_fused": 0.20580007867772135,
+      "p_tabular": 0.999999,
+      "p_temporal": 0.5,
+      "p_novelty": 1.3926403609717823e-07,
+      "n_engagements": 0,
+      "caps": [
+        "high_rate_view",
+        "positions",
+        "shots",
+        "view_angles"
+      ]
+    },
+    {
+      "file": "ava-legit-firstkill_kill_71079_to_71379.csv",
+      "p_fused": 0.29280125884354136,
+      "p_tabular": 0.999999,
+      "p_temporal": 0.5,
+      "p_novelty": 1.9294565270346636e-07,
+      "n_engagements": 0,
+      "caps": [
+        "high_rate_view",
+        "positions",
+        "shots",
+        "view_angles"
+      ]
+    },
+    {
+      "file": "ava-legit-firstkill_kill_7573_to_7873.csv",
+      "p_fused": 0.20580007867772135,
+      "p_tabular": 0.999999,
+      "p_temporal": 0.5,
+      "p_novelty": 1.3926403609717823e-07,
+      "n_engagements": 0,
+      "caps": [
+        "high_rate_view",
+        "positions",
+        "shots",
+        "view_angles"
+      ]
+    },
+    {
+      "file": "ava-legit-firstkill_kill_84408_to_84708.csv",
+      "p_fused": 0.20580007867772135,
+      "p_tabular": 0.999999,
+      "p_temporal": 0.5,
+      "p_novelty": 1.3926403609717823e-07,
+      "n_engagements": 0,
+      "caps": [
+        "high_rate_view",
+        "positions",
+        "shots",
+        "view_angles"
+      ]
+    },
+    {
+      "file": "ava-legit-firstkill_kill_86581_to_86881.csv",
+      "p_fused": 0.29280125884354136,
+      "p_tabular": 0.999999,
+      "p_temporal": 0.5,
+      "p_novelty": 1.5080866913144374e-07,
+      "n_engagements": 0,
+      "caps": [
+        "high_rate_view",
+        "positions",
+        "shots",
+        "view_angles"
+      ]
+    },
+    {
+      "file": "ava-legit-firstkill_kill_91447_to_91747.csv",
+      "p_fused": 0.29280125884354136,
+      "p_tabular": 0.999999,
+      "p_temporal": 0.5,
+      "p_novelty": 1.496088988644374e-07,
+      "n_engagements": 0,
+      "caps": [
+        "high_rate_view",
+        "positions",
+        "shots",
+        "view_angles"
+      ]
+    },
+    {
+      "file": "ava-legit-firstkill_kill_91928_to_92228.csv",
+      "p_fused": 0.20580007867772135,
+      "p_tabular": 0.999999,
+      "p_temporal": 0.5,
+      "p_novelty": 1.3926403609717823e-07,
+      "n_engagements": 0,
+      "caps": [
+        "high_rate_view",
+        "positions",
+        "shots",
+        "view_angles"
+      ]
+    },
+    {
+      "file": "ava-legit-firstkill_kill_92701_to_93001.csv",
+      "p_fused": 0.20580007867772135,
+      "p_tabular": 0.999999,
+      "p_temporal": 0.5,
+      "p_novelty": 1.3926403609717823e-07,
+      "n_engagements": 0,
+      "caps": [
+        "high_rate_view",
+        "positions",
+        "shots",
+        "view_angles"
+      ]
+    }
+  ]
+}

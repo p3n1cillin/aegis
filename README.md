@@ -54,7 +54,7 @@ Game plugin / demo / generic JSON
    service/ + cli     → verdicts (clear / watch / review / ban)
 ```
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) and [HANDOFF.md](HANDOFF.md) for depth.
+See [ARCHITECTURE.md](ARCHITECTURE.md) and [HANDOFF.md](HANDOFF.md) for depth, and [COMPARISON.md](COMPARISON.md) for an honest read on where this stands against VACnet/EAC/BattlEye/Ricochet/FairFight — verified evidence vs. argued hypothesis, kept separate on purpose.
 
 ## Multi-game path
 
@@ -62,9 +62,13 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) and [HANDOFF.md](HANDOFF.md) for depth.
 2. Graduate to a first-class adapter (CS2 is the reference: recoil tables, plugin wire protocol, demo lowering).
 3. Do **not** retrain the world when you add visibility later — channels fuse independently; missing capabilities are omitted, never zero-filled.
 
+Named presets for `apex_legends`, `warzone`, `tarkov`, and `battlefield` live in `aegis/adapters/presets.py` — the same on-ramp CS2 started from, registered so an integration is a config change, not a code change. None of those titles offer a legitimate server-plugin API the way CS2's MetaMod:Source2 does, so **these presets are architecturally ready and unverified against real telemetry from those games, not "Aegis supports X."** `tests/test_invariants.py::test_generic_presets_score_without_retraining` is the actual claim being made: the one model trained on the CS2-shaped synthetic simulator scores all of them without a retrain — proof that the architecture is game-agnostic, not proof that detection quality transfers, which cannot be known until a studio integration produces real telemetry to calibrate against.
+
 ## Honest limitations
 
 Synthetic bootstrap metrics are for ranking detectors and proving the pipeline. Operating thresholds must be re-derived on real negatives before any verdict is issued. See the simulator docstring in `aegis/train/simulate.py`.
+
+Current single-session synthetic numbers (`models/eval.json`, `aegis evaluate --stealth-curve`) show weak recall at the `review`/`ban` bands for most individual cheat families in isolation — by design: the SPRT fusion layer is built to accumulate evidence *across* matches, and a single session understates it (see the `notes` field in `train_report.json`). Do not read a strong AUC as a claim that Aegis outperforms VACnet or EAC today; no such head-to-head has been run, and the closed, proprietary nature of both makes one largely impossible to run honestly. What is verified: the CS2 telemetry pipeline itself, against a real dedicated server (`plugins/cs2/SDK_WIRING.md`), and the architecture's cross-title portability (above). What is not: comparative accuracy against any commercial anti-cheat.
 
 ## License
 

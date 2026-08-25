@@ -84,8 +84,8 @@ Auto-ban also requires SPRT upper boundary, minimum effective units, and conform
 
 ## Extending to another game
 
-1. Start with `GenericFPSAdapter` JSON.
-2. When you need weapon tables / native demos / engine flags, copy the CS2 adapter pattern.
-3. Register with `@ADAPTERS.register("your_game")`.
+1. Start with `GenericFPSAdapter` JSON. `aegis/adapters/presets.py` has named starting points (`apex_legends`, `warzone`, `tarkov`, `battlefield`) — configure `unit_scale`/`max_run_speed`/`pitch_up_is_positive` per real telemetry once you have any; the checked-in values are placeholders, not measured constants.
+2. When you need weapon tables / native demos / engine flags, copy the CS2 adapter pattern — but only once you have a live telemetry source to verify field names against. CS2's own adapter had two silently-wrong schema field assumptions (origin, recoil) that looked plausible and were wrong; see `plugins/cs2/SDK_WIRING.md` for how they were actually found.
+3. Register with `@ADAPTERS.register("your_game")` (or register a pre-configured instance, as the presets do).
 4. Run `validate_session` in CI.
 5. Recalibrate conformal + policy thresholds on that title's real negatives — do not reuse CS2 operating points blindly.
