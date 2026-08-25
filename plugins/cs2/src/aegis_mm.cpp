@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 
 namespace aegis {
@@ -265,6 +266,7 @@ void AegisPlugin::read_config(aegis::Config& cfg) {
     if (const char* p = std::getenv("AEGIS_INGEST_PORT")) cfg.ingest_port = std::atoi(p);
     if (const char* s = std::getenv("AEGIS_ACCOUNT_SALT")) cfg.account_salt = s;
     if (const char* v = std::getenv("AEGIS_EMIT_VIS")) cfg.emit_vis = std::atoi(v) != 0;
+    if (const char* v = std::getenv("AEGIS_TICK_HZ")) cfg.tick_hz = static_cast<float>(std::atof(v));
 }
 
 bool AegisPlugin::Load(PluginId id, ISmmAPI* ismm, char* error, size_t maxlen, bool late) {
@@ -505,10 +507,19 @@ void AegisPlugin::Hook_GameFrame(bool simulating, bool /*bFirstTick*/,
     if (!simulating) return;
     ensure_map_session();
     if (!map_active_) return;
-    // Throttle tick frames to ~16 Hz to keep ingest light; shots/hurt stay event-driven.
+    // Throttle tick frames to cfg.tick_hz (default: engine native rate --
+    // see config.h for why lower rates quietly break spectral tremor
+    // detection). Shots/hurt/death stay event-driven regardless.
     static int last_emit_tick = -1000;
     const int tick = now_tick();
-    if (tick - last_emit_tick < 4) return;
+    const float engine_hz = aegis::sdk_hooks().tickrate ? aegis::sdk_hooks().tickrate() : 64.0f;
+    const float want_hz = runtime_.config().tick_hz;
+    int divisor = 1;
+    if (want_hz > 0.f && want_hz < engine_hz) {
+        divisor = static_cast<int>(std::lround(engine_hz / want_hz));
+        if (divisor < 1) divisor = 1;
+    }
+    if (tick - last_emit_tick < divisor) return;
     last_emit_tick = tick;
     runtime_.tick_from_sdk(now_t(), tick);
 

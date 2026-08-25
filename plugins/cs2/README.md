@@ -59,9 +59,10 @@ build-tools\encode_smoke.exe
 | Net client (non-blocking queue) | Done |
 | Account-id salt (HMAC-SHA256 on Windows) | Done |
 | SDK bridge + MetaMod hooks | **Live** — GameFrame, roster, weapon_fire / hurt / death |
-| Schema field readers | **Live** — runtime `ISchemaSystem` offsets |
+| Schema field readers | **Verified live** against a real dedicated server — position/angle/health/weapon/recoil all confirmed sane, `validate_session` returns zero problems on a live capture (see SDK_WIRING.md) |
+| Tick rate | **Native 64 Hz, verified** — was silently throttled to 16 Hz (below the Nyquist floor for tremor detection); measured 64.0 Hz exactly on a fresh capture |
 | Vis worker | Ready; gated off (`hdr.no_vis`) until TraceShape exists |
-| Weapon fire / punch angle | **Live** via `weapon_fire` + schema punch/eye |
+| Weapon fire / punch angle | **Live and verified** — real accumulating recoil pattern confirmed against a live spray |
 | Full MetaMod load | Needs `HL2SDKCS2` + `MMSOURCE112` (lab scripts set these) |
 
 See [SDK_WIRING.md](SDK_WIRING.md) for the exact field/hook checklist.

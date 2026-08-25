@@ -72,21 +72,56 @@ QAngle3 read_angles(void* pawn, const char* cls, const char* field) {
     return {};
 }
 
-// CS2 keeps world transform on the entity's scene node, not the entity itself:
-// CBaseEntity::m_pGameSceneNode -> CGameSceneNode::m_vecAbsOrigin.
+// Recoil moved off the pawn into a services sub-object in this engine build
+// (mirrors the m_CBodyComponent split for position -- see scene_node_for).
+// The effective punch applied to the view is the predictable (client-
+// reproducible) pattern plus a small server-only unpredictable correction;
+// summing both is what Valve's own view code does, and is strictly no worse
+// than either alone. Both names live-confirmed via schema::dump_class
+// against a running server, not assumed from old docs.
+QAngle3 read_punch_angle(void* pawn) {
+    void** services = schema::field<void*>(pawn, "CCSPlayerPawn", "m_pAimPunchServices");
+    if (!services || !*services) return {};
+    QAngle3 total{};
+    if (auto* p = schema::field<QAngle3>(*services, "CCSPlayer_AimPunchServices",
+                                          "m_predictableBaseAngle")) {
+        total.x += p->x;
+        total.y += p->y;
+    }
+    if (auto* p = schema::field<QAngle3>(*services, "CCSPlayer_AimPunchServices",
+                                          "m_unpredictableBaseAngle")) {
+        total.x += p->x;
+        total.y += p->y;
+    }
+    return total;
+}
+
+// CS2 keeps world transform on the entity's scene node, reached through a
+// two-hop chain confirmed live against a running server (schema field names
+// drift across engine builds, so this is derived at runtime, never assumed):
+//   CBaseEntity::m_CBodyComponent (CBodyComponent*)
+//     -> CBodyComponent::m_pSceneNode (CGameSceneNode*)
+//       -> CGameSceneNode::m_vecAbsOrigin / m_angAbsRotation
+void* scene_node_for(void* pawn) {
+    void** body_ptr = schema::field<void*>(pawn, "CBaseEntity", "m_CBodyComponent");
+    if (!body_ptr || !*body_ptr) return nullptr;
+    void** node_ptr = schema::field<void*>(*body_ptr, "CBodyComponent", "m_pSceneNode");
+    return node_ptr ? *node_ptr : nullptr;
+}
+
 Vec3 read_scene_origin(void* pawn) {
-    void** node_ptr = schema::field<void*>(pawn, "CBaseEntity", "m_pGameSceneNode");
-    if (!node_ptr || !*node_ptr) return {};
-    if (auto* p = schema::field<Vec3>(*node_ptr, "CGameSceneNode", "m_vecAbsOrigin")) {
+    void* node = scene_node_for(pawn);
+    if (!node) return {};
+    if (auto* p = schema::field<Vec3>(node, "CGameSceneNode", "m_vecAbsOrigin")) {
         return *p;
     }
     return {};
 }
 
 QAngle3 read_scene_angles(void* pawn) {
-    void** node_ptr = schema::field<void*>(pawn, "CBaseEntity", "m_pGameSceneNode");
-    if (!node_ptr || !*node_ptr) return {};
-    if (auto* p = schema::field<QAngle3>(*node_ptr, "CGameSceneNode", "m_angAbsRotation")) {
+    void* node = scene_node_for(pawn);
+    if (!node) return {};
+    if (auto* p = schema::field<QAngle3>(node, "CGameSceneNode", "m_angAbsRotation")) {
         return *p;
     }
     return {};
@@ -245,10 +280,7 @@ FireSnapshot snapshot_fire(void* pawn) {
     if (eye.x == 0 && eye.y == 0) {
         eye = read_angles(pawn, "CCSPlayerPawnBase", "m_angEyeAngles");
     }
-    QAngle3 punch = read_angles(pawn, "CCSPlayerPawn", "m_aimPunchAngle");
-    if (punch.x == 0 && punch.y == 0) {
-        punch = read_angles(pawn, "CCSPlayerPawnBase", "m_aimPunchAngle");
-    }
+    QAngle3 punch = read_punch_angle(pawn);
     fs.pitch = eye.pitch();
     fs.yaw = eye.yaw();
     fs.punch_pitch = punch.pitch();

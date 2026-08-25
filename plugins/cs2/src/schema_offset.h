@@ -14,6 +14,10 @@ bool ready();
 // Returns -1 if missing.
 int offset_of(const char* class_name, const char* field_name);
 
+// One-shot reflection dump (class name + own fields + base class names) to
+// AEGIS_LOG_FILE. For discovering real field names instead of guessing them.
+void dump_class(const char* class_name);
+
 template <typename T>
 T* field(void* obj, const char* class_name, const char* field_name) {
     if (!obj) return nullptr;
