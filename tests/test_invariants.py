@@ -165,6 +165,54 @@ def test_source_path_containment_blocks_traversal(tmp_path: Path):
         _resolve_source_path("../outside.aegis", str(allowed))
 
 
+def test_service_api_key_check_needs_no_trained_model():
+    """The key gate on /v1/* is enforced without a trained ensemble too, so
+    it is covered on a fresh checkout and in CI, not only after `aegis train`.
+    /v1/attest/issue needs no model."""
+    import json
+    import threading
+    import time
+    import urllib.error
+    import urllib.request
+
+    import uvicorn
+
+    from aegis.core.config import AegisConfig
+    from aegis.service import create_app
+
+    cfg = AegisConfig(model_dir="no-such-models-dir")
+    cfg.api_key = "test-key"
+    app = create_app(model_dir=cfg.model_dir, config=cfg)
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=8124, log_level="error"))
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    try:
+        for _ in range(50):
+            if server.started:
+                break
+            time.sleep(0.1)
+
+        def post(headers: dict) -> int:
+            req = urllib.request.Request(
+                "http://127.0.0.1:8124/v1/attest/issue",
+                data=json.dumps({"session_id": "s1"}).encode(),
+                headers={"Content-Type": "application/json", **headers}, method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=5) as r:
+                    return r.status
+            except urllib.error.HTTPError as e:
+                return e.code
+
+        assert post({}) == 401
+        assert post({"X-Aegis-Api-Key": "wrong"}) == 401
+        assert post({"X-Aegis-Api-Key": "test-ke"}) == 401  # prefix of the key
+        assert post({"X-Aegis-Api-Key": "test-key"}) == 200
+    finally:
+        server.should_exit = True
+        thread.join(timeout=5)
+
+
 def test_service_api_key_gates_v1_routes():
     """Live end-to-end check: /health stays open, /v1/analyze requires the
     configured X-Aegis-Api-Key, and a path-traversal source is rejected even

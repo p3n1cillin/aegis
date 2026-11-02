@@ -1,0 +1,25 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      # CPU-only torch: the CUDA wheels are several GB and the tests do not
+      # use a GPU.
+      - run: >-
+          pip install -e ".[dev]"
+          --extra-index-url https://download.pytorch.org/whl/cpu
+      # Tests that need a trained models/ directory skip on a fresh checkout
+      # (`aegis train` is too heavy for CI); the rest run.
+      - run: python -m pytest -q -rs
