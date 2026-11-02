@@ -8,6 +8,9 @@ namespace aegis {
 struct Config {
     std::string ingest_host = "127.0.0.1";
     int ingest_port = 9100;
+    // Shared secret sent in an `auth` frame at the start of every connection.
+    // Must match AEGIS_INGEST_TOKEN on the ingest service; empty sends none.
+    std::string ingest_token;
     bool compress = true;
     bool emit_vis = true;          // set false / hdr.no_vis if traces unavailable
     float vis_hz = 16.0f;

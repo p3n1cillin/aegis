@@ -29,6 +29,14 @@ std::vector<uint8_t> encode_hdr(const std::string& session_id,
     return w.bytes();
 }
 
+std::vector<uint8_t> encode_auth(const std::string& token) {
+    MsgpackWriter w;
+    w.map(2);
+    w.key("k"); w.str("auth");
+    w.key("token"); w.str(token);
+    return w.bytes();
+}
+
 std::vector<uint8_t> encode_players(const std::vector<PlayerInfoFrame>& players,
                                     uint32_t seq) {
     MsgpackWriter w;

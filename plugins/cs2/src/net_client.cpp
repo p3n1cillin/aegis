@@ -1,5 +1,7 @@
 #include "net_client.h"
 
+#include "frames.h"
+
 #include <chrono>
 #include <string>
 #include <thread>
@@ -27,9 +29,10 @@ NetClient::NetClient() = default;
 
 NetClient::~NetClient() { stop(); }
 
-void NetClient::configure(std::string host, int port) {
+void NetClient::configure(std::string host, int port, const std::string& token) {
     host_ = std::move(host);
     port_ = port;
+    auth_packet_ = token.empty() ? std::vector<uint8_t>{} : frame_packet(encode_auth(token));
 }
 
 void NetClient::start() {
@@ -103,6 +106,9 @@ bool NetClient::ensure_connected() {
     if (s == kInvalid) return false;
     sock_ = s;
     connected_ = true;
+    if (!auth_packet_.empty() && !send_all(auth_packet_.data(), auth_packet_.size())) {
+        return false;  // send_all cleared connected_; the next call reconnects
+    }
     return true;
 }
 
@@ -114,7 +120,13 @@ bool NetClient::send_all(const uint8_t* data, size_t n) {
                              reinterpret_cast<const char*>(data + sent),
                              int(n - sent), 0);
 #else
+        // MSG_NOSIGNAL: a send into a connection the ingest service closed
+        // raises SIGPIPE otherwise, and that kills the whole game server.
+#  ifdef MSG_NOSIGNAL
+        const ssize_t r = ::send(sock_, data + sent, n - sent, MSG_NOSIGNAL);
+#  else
         const ssize_t r = ::send(sock_, data + sent, n - sent, 0);
+#  endif
 #endif
         if (r <= 0) {
             connected_ = false;
