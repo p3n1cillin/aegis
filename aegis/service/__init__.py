@@ -10,6 +10,7 @@ false until an operator flips ``policy.shadow_mode`` in config.
 
 from __future__ import annotations
 
+import hmac
 import logging
 import time
 from pathlib import Path
@@ -181,7 +182,11 @@ def create_app(
         )
 
     def require_api_key(x_aegis_api_key: str = Header(default="")) -> None:
-        if cfg.api_key and x_aegis_api_key != cfg.api_key:
+        # Constant time, like /review: `!=` returns at the first differing
+        # byte, which leaks how much of a guessed key is right.
+        if cfg.api_key and not hmac.compare_digest(
+            x_aegis_api_key.encode(), cfg.api_key.encode()
+        ):
             raise HTTPException(401, "missing or invalid X-Aegis-Api-Key")
 
     @app.on_event("startup")
