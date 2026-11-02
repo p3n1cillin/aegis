@@ -15,9 +15,19 @@ Commands:
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import sys
 from pathlib import Path
+
+
+def _is_loopback(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -56,6 +66,8 @@ def main(argv: list[str] | None = None) -> int:
     p_serve.add_argument("--model-dir", type=str, default="models")
     p_serve.add_argument("--host", type=str, default="127.0.0.1")
     p_serve.add_argument("--port", type=int, default=8080)
+    p_serve.add_argument("--allow-unauthenticated", action="store_true",
+                         help="serve /v1/* on a non-loopback host without AEGIS_API_KEY")
 
     p_ing = sub.add_parser("ingest", help="live CS2 plugin TCP ingest")
     p_ing.add_argument("--model-dir", type=str, default="models")
@@ -172,7 +184,16 @@ def main(argv: list[str] | None = None) -> int:
 
         cfg = AegisConfig(model_dir=args.model_dir)
         cfg.api_key = os.environ.get("AEGIS_API_KEY", "")
-        if args.host not in ("127.0.0.1", "localhost", "::1") and not cfg.api_key:
+        if not _is_loopback(args.host) and not cfg.api_key:
+            if not args.allow_unauthenticated:
+                print(
+                    f"[aegis] refusing to serve on {args.host} (not loopback) with no "
+                    "AEGIS_API_KEY set: /v1/* routes would be open to anyone who can "
+                    "route to this host. Set AEGIS_API_KEY, bind 127.0.0.1, or pass "
+                    "--allow-unauthenticated.",
+                    file=sys.stderr,
+                )
+                return 2
             print(
                 f"[aegis] WARNING: serving on {args.host} (not loopback) with no "
                 "AEGIS_API_KEY set -- /v1/* routes are reachable by anyone who can "

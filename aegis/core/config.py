@@ -125,7 +125,8 @@ class AegisConfig:
     model_dir: str = "models"
     # Empty means auth is off -- fine for `aegis serve --host 127.0.0.1` (the
     # CLI default), a real liability the moment anyone binds a non-loopback
-    # host. Set via AEGIS_API_KEY; checked against the X-Aegis-Api-Key header
+    # host, so `aegis serve` refuses that unless --allow-unauthenticated is
+    # passed. Set via AEGIS_API_KEY; checked against the X-Aegis-Api-Key header
     # on every /v1/* route except /health.
     api_key: str = ""
     # AnalyzeRequest.source may be a filesystem path (documented, for trusted
