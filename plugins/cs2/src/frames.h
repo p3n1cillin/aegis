@@ -45,6 +45,9 @@ std::vector<uint8_t> encode_hdr(const std::string& session_id,
                                  bool no_vis,
                                  uint32_t seq);
 
+// First frame on every connection when an ingest token is configured.
+std::vector<uint8_t> encode_auth(const std::string& token);
+
 std::vector<uint8_t> encode_players(const std::vector<PlayerInfoFrame>& players,
                                     uint32_t seq);
 

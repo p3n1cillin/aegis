@@ -13,6 +13,16 @@ server start; the adapter rebases them to session-relative.
 
 ## Frames
 
+### `auth` — first on every connection, when a token is configured
+| key | type | meaning |
+|---|---|---|
+| `token` | str | shared secret; must equal `AEGIS_INGEST_TOKEN` on the ingest service |
+
+If the service has `AEGIS_INGEST_TOKEN` set, a connection whose first frame is
+not a matching `auth` is closed and nothing it sent is scored or captured. The
+plugin sends `auth` again after every reconnect. With no token configured,
+`auth` frames are ignored.
+
 ### `hdr` — once, first
 | key | type | meaning |
 |---|---|---|

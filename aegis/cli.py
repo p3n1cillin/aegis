@@ -205,11 +205,21 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd == "ingest":
+        import os
+
         from .service.ingest import serve_ingest
 
+        token = os.environ.get("AEGIS_INGEST_TOKEN", "")
+        if not token and not _is_loopback(args.host):
+            print(
+                f"[aegis] WARNING: ingest on {args.host} (not loopback) with no "
+                "AEGIS_INGEST_TOKEN set -- anyone who can reach this port can push "
+                "telemetry. Set the same AEGIS_INGEST_TOKEN here and on the game server.",
+                file=sys.stderr,
+            )
         serve_ingest(
             host=args.host, port=args.port,
-            model_dir=args.model_dir, capture_dir=args.capture_dir,
+            model_dir=args.model_dir, capture_dir=args.capture_dir, token=token,
         )
         return 0
 

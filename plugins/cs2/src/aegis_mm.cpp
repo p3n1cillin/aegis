@@ -24,7 +24,7 @@ static std::string make_session_id() {
 
 void PluginRuntime::load(const Config& cfg) {
     cfg_ = cfg;
-    net_.configure(cfg_.ingest_host, cfg_.ingest_port);
+    net_.configure(cfg_.ingest_host, cfg_.ingest_port, cfg_.ingest_token);
     net_.start();
     vis_.configure(cfg_.vis_hz, cfg_.vis_pair_min_interval_s);
     vis_.set_enabled(false);
@@ -264,6 +264,7 @@ PLUGIN_EXPOSE(AegisPlugin, g_plugin);
 void AegisPlugin::read_config(aegis::Config& cfg) {
     if (const char* h = std::getenv("AEGIS_INGEST_HOST")) cfg.ingest_host = h;
     if (const char* p = std::getenv("AEGIS_INGEST_PORT")) cfg.ingest_port = std::atoi(p);
+    if (const char* t = std::getenv("AEGIS_INGEST_TOKEN")) cfg.ingest_token = t;
     if (const char* s = std::getenv("AEGIS_ACCOUNT_SALT")) cfg.account_salt = s;
     if (const char* v = std::getenv("AEGIS_EMIT_VIS")) cfg.emit_vis = std::atoi(v) != 0;
     if (const char* v = std::getenv("AEGIS_TICK_HZ")) cfg.tick_hz = static_cast<float>(std::atof(v));

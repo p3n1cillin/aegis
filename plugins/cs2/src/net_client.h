@@ -17,7 +17,9 @@ public:
     NetClient();
     ~NetClient();
 
-    void configure(std::string host, int port);
+    // A non-empty token is sent as an `auth` frame first on every connection,
+    // reconnects included, before any queued packet.
+    void configure(std::string host, int port, const std::string& token = "");
     void start();
     void stop();
 
@@ -34,6 +36,7 @@ private:
 
     std::string host_;
     int port_ = 9100;
+    std::vector<uint8_t> auth_packet_;
     std::atomic<bool> running_{false};
     std::atomic<bool> connected_{false};
     std::atomic<uint64_t> dropped_{0};

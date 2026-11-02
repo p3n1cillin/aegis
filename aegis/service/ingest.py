@@ -13,6 +13,7 @@ a dropped tick looks like a teleport to every kinematic feature.
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 import time
@@ -193,13 +194,19 @@ async def _handle_client(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
     hub: IngestHub,
+    token: str = "",
 ) -> None:
     addr = writer.get_extra_info("peername")
     peer = f"{addr[0]}:{addr[1]}" if addr else "unknown"
     st = StreamState(peer=peer)
     log.info("ingest connect %s", peer)
+    # With a token configured, the first frame on every connection must be
+    # {"k": "auth", "token": ...}; anything else is dropped unscored, so a host
+    # that can merely reach the port cannot inject telemetry or verdicts.
+    authed = not token
+    rejected = False
     try:
-        while True:
+        while not rejected:
             try:
                 chunk = await reader.read(65536)
             except (ConnectionError, OSError) as e:
@@ -216,6 +223,20 @@ async def _handle_client(
                 log.warning("bad frame from %s: %s", peer, e)
                 break
             for fr in frames:
+                if fr.get("k") == "auth":
+                    if not authed:
+                        authed = hmac.compare_digest(
+                            str(fr.get("token", "")).encode(), token.encode()
+                        )
+                        if not authed:
+                            log.warning("ingest from %s: wrong token; closing", peer)
+                            rejected = True
+                            break
+                    continue
+                if not authed:
+                    log.warning("ingest from %s: no auth frame; closing", peer)
+                    rejected = True
+                    break
                 seq = fr.get("seq")
                 if seq is not None:
                     seq = int(seq)
@@ -226,7 +247,9 @@ async def _handle_client(
                 if fr.get("k") == "hdr":
                     st.session_id = str(fr.get("session_id", ""))
                 st.frames.append(fr)
-        if st.frames:
+        if rejected:
+            pass
+        elif st.frames:
             result = hub.ingest_frames(st.frames, gaps=st.gaps)
             log.info(
                 "ingest closed %s session=%s frames=%d gaps=%d capture=%s players=%d",
@@ -260,10 +283,11 @@ async def run_ingest_server(
     model_dir: str | Path = "models",
     capture_dir: str | Path = "data/captures",
     config: AegisConfig | None = None,
+    token: str = "",
 ) -> None:
     hub = IngestHub(model_dir=model_dir, capture_dir=capture_dir, config=config)
     server = await asyncio.start_server(
-        lambda r, w: _handle_client(r, w, hub), host, port
+        lambda r, w: _handle_client(r, w, hub, token), host, port
     )
     addrs = ", ".join(str(s.getsockname()) for s in server.sockets or [])
     log.info("aegis ingest listening on %s (model=%s capture=%s)", addrs, model_dir, capture_dir)
@@ -277,10 +301,11 @@ def serve_ingest(
     *,
     model_dir: str | Path = "models",
     capture_dir: str | Path = "data/captures",
+    token: str = "",
 ) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     asyncio.run(run_ingest_server(
-        host, port, model_dir=model_dir, capture_dir=capture_dir
+        host, port, model_dir=model_dir, capture_dir=capture_dir, token=token
     ))
 
 
@@ -291,10 +316,13 @@ def push_frames(
     *,
     compress: bool = False,
     timeout: float = 30.0,
+    token: str = "",
 ) -> None:
     """Lab helper: push a synthetic / recorded frame list to a running ingest."""
     import socket
 
+    if token:
+        frames = [{"k": "auth", "token": token}, *frames]
     payload = b"".join(encode_frame(fr, compress=compress) for fr in frames)
     with socket.create_connection((host, port), timeout=timeout) as sock:
         sock.sendall(payload)

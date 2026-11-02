@@ -25,6 +25,12 @@ int main() {
         return 1;
     }
 
+    auto auth = encode_auth("lab-token");
+    if (!expect_key(auth, "auth") || !expect_key(auth, "token") || !expect_key(auth, "lab-token")) {
+        std::fprintf(stderr, "auth frame missing keys\n");
+        return 1;
+    }
+
     auto hdr = encode_hdr("sess-1", "de_anubis", 64.0f, "lab", "0.1.0", true, 1);
     auto pkt = frame_packet(hdr);
     if (pkt.size() < 5 || pkt[0] != 0) {
