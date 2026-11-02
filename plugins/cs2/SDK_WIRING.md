@@ -95,9 +95,15 @@ a server config issue, not a plugin bug. The script now matches `start-lab.bat`
 set HL2SDKCS2=...\lab\sdk\hl2sdk-cs2
 set MMSOURCE112=...\lab\sdk\metamod-source
 set AEGIS_ACCOUNT_SALT=your-long-random-server-secret
+set AEGIS_INGEST_TOKEN=another-long-random-secret
 lab\build-plugin.bat
 lab\start-lab.bat
 ```
+
+`AEGIS_INGEST_TOKEN` must match the value set where `aegis ingest` runs. With
+it set there, connections that don't open with a matching `auth` frame are
+dropped unscored (see `PLUGIN_PROTOCOL.md`). Unset on both sides, ingest works
+as before but accepts telemetry from anyone who can reach the port.
 
 ## 2. Schema fields (`sdk_bridge.cpp` / `schema_offset.cpp`)
 
